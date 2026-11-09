@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>A Game About a Dune</title>
+<meta name="description" content="Une dune de sable au milieu de l'océan, simulée avec de la vraie physique : creuse, mouille, construis.">
+<meta name="theme-color" content="#2f7fb0">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233aa0d0'/%3E%3Cpath d='M2 24c6-10 12-13 17-8 3-3 7-2 11 8z' fill='%23e8c88a'/%3E%3C/svg%3E">
+<style>
+  :root { --glass: rgba(18, 34, 48, .52); --line: rgba(255,255,255,.16); --ink: #f4f8fb; --dim: rgba(244,248,251,.72); --accent: #ffd27a; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #6fa9cf; color: var(--ink);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overscroll-behavior: none; }
+  canvas#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+  .panel { background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
+    backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3); box-shadow: 0 6px 24px rgba(0,20,40,.25); }
+  #title { position: fixed; left: max(14px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top)); padding: 8px 14px; pointer-events: none; }
+  #title h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .02em; }
+  #title p { margin: 0; font-size: 12px; color: var(--dim); }
+  #side { position: fixed; right: max(14px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top)); padding: 10px 12px; width: 208px; display: grid; gap: 8px; }
+  #side label { display: grid; grid-template-columns: 62px 1fr; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 22px; margin: 0; }
+  .row { display: flex; gap: 6px; }
+  button { font: inherit; color: var(--ink); background: rgba(255,255,255,.1); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+  button:hover { background: rgba(255,255,255,.18); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row button { flex: 1; padding: 6px 8px; font-size: 13px; }
+  #bar { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); padding: 8px; display: flex; gap: 8px; }
+  #bar button { width: 68px; height: 64px; display: grid; place-items: center; gap: 0; padding: 6px 2px 4px; font-size: 12px; border-radius: 12px; }
+  #bar button svg { width: 28px; height: 28px; }
+  #bar button[aria-pressed=true] { background: rgba(255, 210, 122, .26); border-color: var(--accent); color: #fff; }
+  #bar kbd { display: none; }
+  #status { position: fixed; left: 50%; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 92px); transform: translateX(-50%);
+    padding: 6px 14px; font-size: 13px; white-space: nowrap; max-width: calc(100vw - 24px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+  #help { position: fixed; inset: 0; display: none; place-items: center; background: rgba(6,20,32,.45); padding: 16px; z-index: 5; }
+  #help.open { display: grid; }
+  #help .panel { max-width: 560px; max-height: 100%; overflow: auto; padding: 18px 22px; }
+  #help h2 { margin: 0 0 8px; font-size: 18px; }
+  #help h3 { margin: 14px 0 4px; font-size: 14px; color: var(--accent); }
+  #help ul { margin: 0; padding-left: 18px; color: var(--dim); font-size: 14px; }
+  #help li { margin: 3px 0; }
+  #help b { color: var(--ink); font-weight: 600; }
+  #help .close { margin-top: 14px; padding: 8px 16px; }
+  #fatal { position: fixed; inset: 0; display: none; place-items: center; text-align: center; padding: 24px; background: #24506e; }
+  @media (hover: hover) { #bar kbd { display: inline; font: 11px ui-monospace, monospace; opacity: .55; margin-left: 4px; } }
+  @media (max-width: 640px) {
+    #title p { display: none; }
+    #side { width: 168px; padding: 8px 10px; gap: 4px; top: calc(max(12px, env(safe-area-inset-top)) + 46px); }
+    #side label { grid-template-columns: 50px 1fr; font-size: 12px; }
+    #bar button { width: 62px; height: 58px; }
+    #status { font-size: 12px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 84px); }
+  }
+</style>
+</head>
+<body>
+<canvas id="view" tabindex="0" aria-label="Île de sable simulée"></canvas>
+
+<div id="title" class="panel">
+  <h1>A Game About a Dune</h1>
+  <p>Une dune, un océan, de la vraie physique.</p>
+</div>
+
+<div id="side" class="panel">
+  <label>Houle <input id="swell" type="range" min="0" max="2" step="0.05" value="1" aria-label="Hauteur de la houle"></label>
+  <label>Soleil <input id="sun" type="range" min="0" max="4" step="0.1" value="1" aria-label="Vitesse de séchage du sable"></label>
+  <div class="row">
+    <button id="reset" type="button">Réinitialiser</button>
+    <button id="helpBtn" type="button" aria-label="Aide" style="flex:0 0 38px">?</button>
+  </div>
+</div>
+
+<div id="status" class="panel" role="status" aria-live="polite"></div>
+
+<div id="bar" class="panel" role="toolbar" aria-label="Outils">
+  <button type="button" data-tool="camera" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="4"/><path d="M12 3c2.5 2.5 2.5 15.5 0 18M12 3c-2.5 2.5-2.5 15.5 0 18"/><path d="m18.5 6 2.5-.5-.5 2.5"/></svg>
+    <span>Caméra<kbd>1</kbd></span>
+  </button>
+  <button type="button" data-tool="shovel" aria-pressed="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 3 21 5.5M19.700 4.300 10 14"/><path d="M7.5 11.5 12.5 16.5 9 20c-1.5 1.5-4 1.5-5 .5s-1-3.5.5-5z"/></svg>
+    <span>Pelle<kbd>2</kbd></span>
+  </button>
+  <button type="button" data-tool="bucket" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9h15l-2 11h-11z"/><path d="M5 9c0-9 14-9 14 0"/></svg>
+    <span>Seau<kbd>3</kbd></span>
+  </button>
+  <button type="button" data-tool="water" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"/><path d="M9.5 15a2.5 2.5 0 0 0 2.5 2.5"/></svg>
+    <span>Eau<kbd>4</kbd></span>
+  </button>
+</div>
+
+<div id="help" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+  <div class="panel">
+    <h2 id="helpTitle">Comment jouer</h2>
+    <h3>Outils</h3>
+    <ul>
+      <li><b>Pelle</b> — un clic creuse, le clic suivant verse le sable là où tu vises.</li>
+      <li><b>Seau</b> — clique sur le sable (ou dans l’eau) pour le remplir, puis clique pour démouler un pâté ou verser l’eau.</li>
+      <li><b>Eau</b> — maintiens appuyé pour arroser.</li>
+      <li><b>Caméra</b> — glisse pour tourner. Toujours disponible : clic droit, molette, ou deux doigts.</li>
+    </ul>
+    <h3>Ce que la physique permet</h3>
+    <ul>
+      <li>Le sable <b>sec</b> s’éboule au-delà de 34° : impossible d’en faire un mur.</li>
+      <li>Le sable <b>humide</b> tient presque à la verticale — arrose avant de construire.</li>
+      <li>Le sable <b>détrempé</b> se liquéfie : trop d’eau fait fondre ton château.</li>
+      <li>L’eau coule selon la pente, s’infiltre, creuse des rigoles et emporte le sable.</li>
+      <li>Creuse sous le niveau de la mer près de la plage : la nappe remplit le trou.</li>
+      <li>Au soleil le sable sèche et redevient fragile ; à l’ombre du parasol, il sèche moins vite.</li>
+    </ul>
+    <button class="close" type="button" id="helpClose">C’est parti</button>
+  </div>
+</div>
+
+<div id="fatal"><div><h2>Impossible de démarrer</h2><p id="fatalMsg">Ce jeu a besoin de WebGL 2.</p></div></div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

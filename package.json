@@ -1,0 +1,1 @@
+{"type":"module","name":"a-game-about-a-dune","private":true,"scripts":{"test":"node tests/sim.test.mjs","start":"python3 -m http.server 8080"}}
