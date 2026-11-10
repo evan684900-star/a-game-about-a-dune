@@ -9,7 +9,7 @@ const BUCKET_H = 0.42;
 const BUCKET_VOL = ((Math.PI * BUCKET_H) / 3) * (BUCKET_R * BUCKET_R + BUCKET_R * BUCKET_RB + BUCKET_RB * BUCKET_RB);
 const WATER_RATE = 0.012; // m³/s
 const SAND_P = 1.2e-4; // volume d'une particule de sable
-const WATER_P = 1.0e-4;
+const WATER_P = 6e-5;
 
 const SAND_DRY = new THREE.Color(0xdcb87a);
 const SAND_WET = new THREE.Color(0x7a5f3c);
@@ -125,6 +125,7 @@ export class Tools {
     this.emit = null;
     this.down = false;
     this.right = new THREE.Vector3(1, 0, 0);
+    this.onEvent = () => {}; // (nom, donnée) : sons, sauvegarde
 
     this.shovel = { ...buildShovel(), load: 0, moist: 0, lean: 0.6, leanT: 0.6, h: 0.35, hT: 0.35 };
     this.bucket = { ...buildBucket(), kind: null, vol: 0, moist: 0, flip: 0, flipT: 0, h: 0.5, hT: 0.5, side: 0, sideT: 0 };
@@ -192,6 +193,7 @@ export class Tools {
         s.leanT = 0.2;
         this.at(0.17, () => {
           const r = sim.dig(c.x, c.z, SHOVEL_R, SHOVEL_DEPTH);
+          this.onEvent('dig', r.moist);
           s.load = r.vol;
           s.moist = r.moist;
           s.mound.visible = r.vol > 1e-4;
@@ -223,11 +225,13 @@ export class Tools {
         this.at(0.22, () => {
           if (inWater) {
             b.vol = sim.takeWater(c.x, c.z, 0.5, BUCKET_VOL);
+            this.onEvent('scoop', 1);
             b.kind = b.vol > 1e-3 ? 'water' : null;
             b.contentMat.color.copy(WATER_COL);
             b.contentMat.roughness = 0.1;
           } else {
             const r = sim.dig(c.x, c.z, 0.4, 0.5, BUCKET_VOL);
+            this.onEvent('dig', r.moist);
             b.vol = r.vol;
             b.moist = r.moist;
             b.kind = r.vol > 1e-3 ? 'sand' : null;
@@ -247,6 +251,7 @@ export class Tools {
         b.hT = BUCKET_H / 2 + 0.02;
         this.at(0.38, () => {
           sim.stamp(c.x, c.z, BUCKET_R, BUCKET_RB, BUCKET_H, b.vol, b.moist);
+          this.onEvent('stamp', b.moist);
           b.kind = null;
           b.vol = 0;
           b.content.visible = false;
@@ -262,7 +267,7 @@ export class Tools {
         this.busy = 1.55;
         b.sideT = 1.75;
         this.at(0.2, () => {
-          this.emit = { kind: 1, vol: b.vol, rate: b.vol / 1.0, moist: 1, src: b.rim, vel: [0.9, 0.1, 0], spread: 0.35 };
+          this.emit = { kind: 1, vol: b.vol, rate: b.vol / 1.0, moist: 1, src: b.rim, vel: [0.9, 0.1, 0], spread: 0.35, pv: b.vol / 480 };
         });
         this.at(1.25, () => {
           b.kind = null;
@@ -357,7 +362,7 @@ export class Tools {
     if (e) {
       let out = Math.min(e.vol, e.rate * dt);
       e.vol -= out;
-      const pv = e.kind === 0 ? SAND_P : WATER_P;
+      const pv = e.pv || (e.kind === 0 ? SAND_P : WATER_P);
       e.src.getWorldPosition(this.v);
       e.acc = (e.acc || 0) + out;
       while (e.acc >= pv || (e.vol <= 1e-9 && e.acc > 1e-9)) {

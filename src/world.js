@@ -117,6 +117,16 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     uPR: { value: 1.4 },
     uPB: { value: new THREE.Vector3() },
     uTool: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uSunCol: { value: new THREE.Vector3() },
+    uSkyAmb: { value: new THREE.Vector3() },
+    uGndAmb: { value: new THREE.Vector3() },
+    uZen: { value: new THREE.Vector3() },
+    uHor: { value: new THREE.Vector3() },
+    uHor2: { value: new THREE.Vector3() },
+    uCloudDark: { value: new THREE.Vector3() },
+    uCloudLit: { value: new THREE.Vector3() },
+    uGlow: { value: new THREE.Vector2() },
+    uWind: { value: 0.2 },
     uData: { value: dataTex },
     uL: { value: L },
     uTexel: { value: 1 / N },
@@ -203,10 +213,58 @@ export function createWorld(renderer, sim, swell, detail, quality) {
   water.push(far);
 
   // lumières pour les objets (parasol, outils)
-  const dl = new THREE.DirectionalLight(0xfff0d8, 9.5);
-  dl.position.copy(sunDir).multiplyScalar(10);
+  const dl = new THREE.DirectionalLight(0xffffff, 9.5);
   scene.add(dl);
-  scene.add(new THREE.HemisphereLight(0xa9c8f5, 0x9c8560, 3.0));
+  const hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 3.0);
+  scene.add(hemi);
+
+  // ---------- heure du jour ----------
+  // Course du soleil de 6 h à 20 h ; couleurs interpolées entre une palette
+  // de soleil rasant et une palette de plein jour.
+  const PAL = {
+    uSunCol: [[1.9, 0.76, 0.27], [3.2, 2.98, 2.56]],
+    uSkyAmb: [[0.165, 0.154, 0.231], [0.342, 0.475, 0.703]],
+    uGndAmb: [[0.092, 0.057, 0.04], [0.2, 0.168, 0.12]],
+    uZen: [[0.07, 0.11, 0.3], [0.1, 0.27, 0.62]],
+    uHor: [[0.95, 0.5, 0.22], [0.56, 0.72, 0.88]],
+    uHor2: [[0.36, 0.34, 0.5], [0.56, 0.72, 0.88]],
+    uCloudDark: [[0.36, 0.29, 0.38], [0.8, 0.85, 0.93]],
+    uCloudLit: [[1.45, 0.7, 0.36], [1.25, 1.2, 1.12]],
+  };
+  const sstep = (a, b, x) => {
+    const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return k * k * (3 - 2 * k);
+  };
+  const light = new THREE.Vector3(1, 1, 1); // éclairement moyen (particules)
+  function setTimeOfDay(hour) {
+    const t = Math.min(1, Math.max(0, (hour - 6) / 14));
+    const el = Math.max(0.035, 1.08 * Math.pow(Math.sin(Math.PI * t), 0.9));
+    const az = 0.1 + (t - 0.5) * 3.5;
+    sunDir.set(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
+    const d = sstep(0.02, 0.5, sunDir.y);
+    for (const key in PAL) {
+      const [a, b] = PAL[key];
+      U[key].value.set(a[0] + (b[0] - a[0]) * d, a[1] + (b[1] - a[1]) * d, a[2] + (b[2] - a[2]) * d);
+    }
+    // le soleil s'éteint en touchant l'horizon
+    U.uSunCol.value.multiplyScalar(0.2 + 0.8 * sstep(0.03, 0.12, sunDir.y));
+    U.uGlow.value.set(0.55 + (0.1 - 0.55) * d, 0.9 + (0.3 - 0.9) * d);
+    const sc = U.uSunCol.value,
+      sa = U.uSkyAmb.value,
+      ga = U.uGndAmb.value;
+    const ms = Math.max(sc.x, sc.y, sc.z),
+      ma = Math.max(sa.x, sa.y, sa.z);
+    dl.color.setRGB(sc.x / ms, sc.y / ms, sc.z / ms);
+    dl.intensity = ms * Math.PI * 0.95;
+    dl.position.copy(sunDir).multiplyScalar(10);
+    hemi.color.setRGB(sa.x / ma, sa.y / ma, sa.z / ma);
+    hemi.groundColor.setRGB(ga.x / ma, ga.y / ma, ga.z / ma);
+    hemi.intensity = ma * Math.PI;
+    const nl = 0.25 + 0.4 * sunDir.y;
+    light.set(sc.x * nl + sa.x * 0.8, sc.y * nl + sa.y * 0.8, sc.z * nl + sa.z * 0.8);
+    sim.sun = Math.max(0.04, sunDir.y) / 0.8; // l'évaporation suit la hauteur du soleil
+  }
+  setTimeOfDay(15.5);
 
   // parasol
   const parasol = buildParasol();
@@ -215,11 +273,13 @@ export function createWorld(renderer, sim, swell, detail, quality) {
   parasol.group.position.set(PX, 0, PZ);
   scene.add(parasol.group);
   const sway = { ax: 0, az: 0, vx: 0, vz: 0, lx: 0.08, lz: -0.06 };
+  const state = { gust: 0.5 };
   const tmp = new THREE.Vector3();
 
   function update(dt, time) {
     U.uTime.value = time;
     U.uSwell.value = sim.swell;
+    U.uWind.value = Math.min(1, sim.wind / 15);
     dataTex.needsUpdate = true;
 
     // parasol : le pied suit le sable, la toile oscille au vent comme un
@@ -232,8 +292,11 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     sway.lx += (THREE.MathUtils.clamp(0.08 - gxs * 0.5, -0.45, 0.45) - sway.lx) * Math.min(1, dt * 1.5);
     sway.lz += (THREE.MathUtils.clamp(-0.06 - gzs * 0.5, -0.45, 0.45) - sway.lz) * Math.min(1, dt * 1.5);
     const gust = 0.5 + 0.5 * Math.sin(time * 0.37) * Math.sin(time * 0.83 + 1.3);
-    const fx = (0.25 + 0.75 * gust) * (0.5 + 0.5 * Math.sin(time * 2.9) * Math.sin(time * 1.3)) * 0.22;
-    const fz = gust * Math.sin(time * 2.1 + 0.7) * 0.1;
+    // poussée du vent ∝ U² (pression dynamique ½·ρ·U²)
+    const push = Math.min(9, (sim.wind / 3.5) * (sim.wind / 3.5));
+    const fx = (0.25 + 0.75 * gust) * (0.5 + 0.5 * Math.sin(time * 2.9) * Math.sin(time * 1.3)) * 0.22 * push;
+    const fz = gust * Math.sin(time * 2.1 + 0.7) * 0.1 * Math.min(3, push);
+    state.gust = gust;
     const w0 = 3.2,
       zeta = 0.22;
     sway.vx += (-w0 * w0 * sway.ax - 2 * zeta * w0 * sway.vx + fx * w0 * w0) * dt;
@@ -254,5 +317,5 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     sim.shade.r2 = parasol.R * parasol.R;
   }
 
-  return { scene, U, water, sky, sunDir, update, parasolPos: { x: PX, z: PZ } };
+  return { scene, U, water, sky, sunDir, update, setTimeOfDay, light, state, parasolPos: { x: PX, z: PZ } };
 }

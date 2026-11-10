@@ -5,6 +5,7 @@ import { makeSwell, makeDetail } from './waves.js';
 import { createWorld } from './world.js';
 import { Particles } from './particles.js';
 import { Tools } from './tools.js';
+import { Sound } from './audio.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#view');
@@ -38,6 +39,12 @@ function start() {
   const { scene, U } = world;
   const particles = new Particles(scene, sim);
   const tools = new Tools(scene, sim, particles);
+  const sound = new Sound();
+  tools.onEvent = (name, v) => {
+    if (name === 'dig') sound.dig(v);
+    else if (name === 'stamp') sound.stamp();
+    else if (name === 'scoop') sound.scoop();
+  };
 
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 9000);
   const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true });
@@ -106,6 +113,7 @@ function start() {
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     canvas.focus({ preventScroll: true });
+    sound.start();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     mouse.x = e.clientX;
     mouse.y = e.clientY;
@@ -197,9 +205,108 @@ function start() {
     if (e.key === 'ArrowUp') camT.pol = Math.max(0.18, camT.pol - step);
     if (e.key === 'ArrowDown') camT.pol = Math.min(1.5, camT.pol + step);
   });
-  $('#swell').addEventListener('input', (e) => (sim.swell = +e.target.value));
-  $('#sun').addEventListener('input', (e) => (sim.sun = +e.target.value));
-  $('#reset').addEventListener('click', () => sim.reset());
+  // réglages : houle, vent, heure
+  const fr = (v, d) => v.toFixed(d).replace('.', ',');
+  const settings = {
+    swell: { el: $('#swell'), out: $('#swellV'), apply: (v) => (sim.swell = v), text: (v) => `× ${fr(v, 2)}` },
+    wind: { el: $('#wind'), out: $('#windV'), apply: (v) => (sim.wind = v), text: (v) => `${Math.round(v * 3.6)} km/h` },
+    hour: {
+      el: $('#hour'),
+      out: $('#hourV'),
+      apply: (v) => world.setTimeOfDay(v),
+      text: (v) => `${Math.floor(v)} h ${String(Math.round((v % 1) * 60)).padStart(2, '0')}`,
+    },
+  };
+  function setSetting(key, v) {
+    const s = settings[key];
+    v = Math.min(+s.el.max, Math.max(+s.el.min, +v));
+    if (!Number.isFinite(v)) return;
+    s.el.value = v;
+    s.apply(v);
+    s.out.textContent = s.text(v);
+  }
+  for (const key in settings) {
+    settings[key].el.addEventListener('input', (e) => setSetting(key, e.target.value));
+    setSetting(key, settings[key].el.value);
+  }
+
+  // son
+  const muteBtn = $('#mute');
+  const showMute = () => muteBtn.setAttribute('aria-pressed', String(!sound.muted));
+  muteBtn.addEventListener('click', () => {
+    sound.setMuted(!sound.muted);
+    showMute();
+  });
+  showMute();
+  window.addEventListener('keydown', () => sound.start(), { once: true });
+  document.addEventListener('visibilitychange', () => {
+    sound.pause(document.hidden);
+    if (document.hidden) save();
+  });
+
+  // ---------- sauvegarde de l'île (dans ce navigateur) ----------
+  const SAVE_KEY = 'dune-save-v1';
+  const b64 = (u8) => {
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const unb64 = (str) => {
+    const s = atob(str);
+    const u8 = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+    return u8;
+  };
+  function save() {
+    if (params.has('nosave')) return;
+    try {
+      const n = sim.N * sim.N;
+      // hauteurs au quart de millimètre, humidité sur 8 bits
+      const s16 = new Uint16Array(n),
+        m8 = new Uint8Array(n);
+      for (let i = 0; i < n; i++) {
+        s16[i] = Math.min(65535, Math.max(0, Math.round((sim.s[i] + sim.sed[i] + 8) * 4000)));
+        m8[i] = Math.round(sim.m[i] * 255);
+      }
+      const data = { N: sim.N, L: sim.L, s: b64(new Uint8Array(s16.buffer)), m: b64(m8) };
+      for (const key in settings) data[key] = +settings[key].el.value;
+      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    } catch (e) {
+      /* stockage indisponible ou plein : on joue sans sauvegarde */
+    }
+  }
+  function restore() {
+    if (params.has('nosave')) return;
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      for (const key in settings) if (key in data) setSetting(key, data[key]);
+      if (data.N !== sim.N || data.L !== sim.L) return;
+      const s16 = new Uint16Array(unb64(data.s).buffer),
+        m8 = unb64(data.m);
+      const s = new Float32Array(s16.length),
+        m = new Float32Array(m8.length);
+      for (let i = 0; i < s.length; i++) {
+        s[i] = s16[i] / 4000 - 8;
+        m[i] = m8[i] / 255;
+      }
+      sim.setTerrain(s, m);
+    } catch (e) {
+      /* sauvegarde illisible : on garde l'île neuve */
+    }
+  }
+  restore();
+  setInterval(save, 20000);
+  window.addEventListener('pagehide', save);
+
+  $('#reset').addEventListener('click', () => {
+    sim.reset();
+    particles.clear();
+    try {
+      localStorage.removeItem(SAVE_KEY);
+    } catch (e) {}
+  });
   $('#helpBtn').addEventListener('click', () => toggleHelp(true));
   $('#helpClose').addEventListener('click', () => {
     toggleHelp(false);
@@ -231,6 +338,7 @@ function start() {
     U.uRes.value.copy(size);
     rt.setSize(Math.max(2, size.x >> 1), Math.max(2, size.y >> 1));
     particles.uScale.value = size.y / (2 * Math.tan((camera.fov * Math.PI) / 360));
+    particles.uHalfRes.value.set(size.x / 2, size.y / 2);
   }
   window.addEventListener('resize', resize);
   resize();
@@ -242,6 +350,7 @@ function start() {
   let slow = 0,
     lastStatus = '';
   const state = { fps: 60 };
+  const audio = { water: 0, sand: 0 };
   function frame(now) {
     requestAnimationFrame(frame);
     const raw = (now - last) / 1000;
@@ -256,6 +365,20 @@ function start() {
     tools.update(dt, cursor, camRight);
     particles.update(dt);
     world.update(dt, sim.time);
+    particles.uLight.value.copy(world.light);
+
+    // son : niveaux tirés de la simulation
+    const ka = 1 - Math.exp(-10 * dt);
+    audio.water += (particles.landedWater / dt - audio.water) * ka;
+    audio.sand += (particles.landedSand / dt - audio.sand) * ka;
+    sound.update({
+      surf: sim.foamSum / (sim.N * sim.N * 0.05),
+      swell: sim.swell,
+      wind: sim.wind,
+      gust: world.state.gust,
+      water: audio.water,
+      sand: audio.sand,
+    });
 
     const c = tools.cursor;
     const cu = U.uCursor.value;
@@ -294,7 +417,7 @@ function start() {
   }
   requestAnimationFrame(frame);
 
-  window.__dune = { sim, tools, cam: camT, camera, state, renderer, selectTool };
+  window.__dune = { sim, tools, world, particles, sound, cam: camT, camera, state, renderer, selectTool, setSetting, save };
 }
 
 try {

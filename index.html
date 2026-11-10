@@ -18,14 +18,19 @@
   #title { position: fixed; left: max(14px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top)); padding: 8px 14px; pointer-events: none; }
   #title h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .02em; }
   #title p { margin: 0; font-size: 12px; color: var(--dim); }
-  #side { position: fixed; right: max(14px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top)); padding: 10px 12px; width: 208px; display: grid; gap: 8px; }
-  #side label { display: grid; grid-template-columns: 62px 1fr; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+  #side { position: fixed; right: max(14px, env(safe-area-inset-right)); top: max(12px, env(safe-area-inset-top)); padding: 10px 12px; width: 258px; display: grid; gap: 6px; }
+  #side label { display: grid; grid-template-columns: 44px 1fr 58px; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+  #side output { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
   input[type=range] { width: 100%; accent-color: var(--accent); height: 22px; margin: 0; }
   .row { display: flex; gap: 6px; }
   button { font: inherit; color: var(--ink); background: rgba(255,255,255,.1); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
   button:hover { background: rgba(255,255,255,.18); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .row button { flex: 1; padding: 6px 8px; font-size: 13px; }
+  .row button { flex: 1; padding: 6px 8px; font-size: 13px; min-height: 32px; }
+  .row button.icon { flex: 0 0 38px; display: grid; place-items: center; padding: 0; }
+  .row button.icon svg { width: 18px; height: 18px; }
+  #mute[aria-pressed=true] .off, #mute[aria-pressed=false] .on { display: none; }
+  #mute[aria-pressed=false] { color: var(--dim); }
   #bar { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); padding: 8px; display: flex; gap: 8px; }
   #bar button { width: 68px; height: 64px; display: grid; place-items: center; gap: 0; padding: 6px 2px 4px; font-size: 12px; border-radius: 12px; }
   #bar button svg { width: 28px; height: 28px; }
@@ -46,8 +51,8 @@
   @media (hover: hover) { #bar kbd { display: inline; font: 11px ui-monospace, monospace; opacity: .55; margin-left: 4px; } }
   @media (max-width: 640px) {
     #title p { display: none; }
-    #side { width: 168px; padding: 8px 10px; gap: 4px; top: calc(max(12px, env(safe-area-inset-top)) + 46px); }
-    #side label { grid-template-columns: 50px 1fr; font-size: 12px; }
+    #side { width: 214px; padding: 8px 10px; gap: 2px; top: calc(max(12px, env(safe-area-inset-top)) + 46px); }
+    #side label { grid-template-columns: 38px 1fr 52px; gap: 6px; font-size: 12px; }
     #bar button { width: 62px; height: 58px; }
     #status { font-size: 12px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 84px); }
   }
@@ -62,11 +67,15 @@
 </div>
 
 <div id="side" class="panel">
-  <label>Houle <input id="swell" type="range" min="0" max="2" step="0.05" value="1" aria-label="Hauteur de la houle"></label>
-  <label>Soleil <input id="sun" type="range" min="0" max="4" step="0.1" value="1" aria-label="Vitesse de séchage du sable"></label>
+  <label><span>Houle</span><input id="swell" type="range" min="0" max="2" step="0.05" value="1" aria-label="Hauteur de la houle"><output id="swellV" for="swell"></output></label>
+  <label><span>Vent</span><input id="wind" type="range" min="0" max="15" step="0.5" value="3.5" aria-label="Vitesse du vent"><output id="windV" for="wind"></output></label>
+  <label><span>Heure</span><input id="hour" type="range" min="6" max="20" step="0.25" value="15.5" aria-label="Heure du jour"><output id="hourV" for="hour"></output></label>
   <div class="row">
     <button id="reset" type="button">Réinitialiser</button>
-    <button id="helpBtn" type="button" aria-label="Aide" style="flex:0 0 38px">?</button>
+    <button id="mute" type="button" aria-label="Son" aria-pressed="true" class="icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18V6L7.5 9.5z"/><path class="on" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/><path class="off" d="m16 9.5 5 5m0-5-5 5"/></svg>
+    </button>
+    <button id="helpBtn" type="button" aria-label="Aide" class="icon">?</button>
   </div>
 </div>
 
@@ -100,6 +109,7 @@
       <li><b>Seau</b> — clique sur le sable (ou dans l’eau) pour le remplir, puis clique pour démouler un pâté ou verser l’eau.</li>
       <li><b>Eau</b> — maintiens appuyé pour arroser.</li>
       <li><b>Caméra</b> — glisse pour tourner. Toujours disponible : clic droit, molette, ou deux doigts.</li>
+      <li>Ton île est <b>sauvegardée</b> automatiquement dans ce navigateur ; « Réinitialiser » repart de zéro.</li>
     </ul>
     <h3>Ce que la physique permet</h3>
     <ul>
@@ -109,6 +119,8 @@
       <li>L’eau coule selon la pente, s’infiltre, creuse des rigoles et emporte le sable.</li>
       <li>Creuse sous le niveau de la mer près de la plage : la nappe remplit le trou.</li>
       <li>Au soleil le sable sèche et redevient fragile ; à l’ombre du parasol, il sèche moins vite.</li>
+      <li>Au-delà de 20 km/h environ, le <b>vent</b> arrache le sable sec : la dune avance, les châteaux secs s’usent.</li>
+      <li>L’<b>heure</b> déplace le soleil : le sable sèche vite à midi, lentement le soir.</li>
     </ul>
     <button class="close" type="button" id="helpClose">C’est parti</button>
   </div>

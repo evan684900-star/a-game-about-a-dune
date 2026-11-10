@@ -1,14 +1,19 @@
-// Simulation physique de l'île : sable, eau, humidité, érosion.
+// Simulation physique de l'île : sable, eau, humidité, érosion, vent.
 // Tout est en unités SI (mètres, secondes). Niveau de la mer = 0.
 //
-//  Eau      : équations de Saint-Venant linéarisées (eau peu profonde) sur
-//             grille décalée : ∂q/∂t = -g·h·∂η/∂x - frottement ; ∂h/∂t = -∇·q
-//             → célérité des ondes √(g·h), levée des vagues sur la plage.
+//  Eau      : équations de Saint-Venant complètes (eau peu profonde, non
+//             linéaires) sur grille décalée :
+//               ∂h/∂t + ∇·q = 0
+//               ∂u/∂t + (u·∇)u = -g·∇η - frottement
+//             advection amont conservant la quantité de mouvement (Stelling &
+//             Duinmeijer 2003) → célérité √(g·h), levée des vagues, ressauts.
 //  Sable    : angle de talus (avalanches) dépendant de l'humidité (cohésion
 //             capillaire), conservation exacte du volume.
 //  Humidité : infiltration type Darcy/Green-Ampt, frange capillaire au-dessus
 //             de la nappe (niveau de la mer), drainage, évaporation.
 //  Érosion  : capacité de transport ∝ (|u| - u_crit)·h, advection conservative.
+//  Vent     : saltation au-dessus d'un seuil (Bagnold/Kawamura), zone d'ombre
+//             sous le vent, équation d'Exner ∂s/∂t = -∂q/∂x.
 
 import { G } from './waves.js';
 
@@ -33,6 +38,12 @@ const UCRIT = 0.22; // vitesse critique d'entraînement (m/s)
 const KE = 2.0; // vitesse d'érosion (1/s)
 const KD = 3.0; // vitesse de dépôt (1/s)
 const SPONGE = 14; // largeur de la zone de forçage (cellules)
+// vent (saltation) — le temps morphologique est accéléré, comme le séchage
+export const WIND_T = 6.0; // vitesse seuil d'entraînement du sable sec (m/s à 1 m)
+const KQ = 0.8e-6; // coefficient de flux : q = KQ·(U - Ut)·(U + Ut)²  (m²/s)
+const L_SAT = 0.8; // longueur de saturation du flux (m)
+const L_DEP = 0.45; // longueur de dépôt à l'abri (m)
+const TAN_SHADOW = 0.25; // pente de la zone d'ombre sous le vent (~14°)
 
 const smooth = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -57,7 +68,11 @@ export class Sim {
     this.dx = L / (N - 1);
     this.waves = waves;
     this.swell = 1;
-    this.sun = 1;
+    this.sun = 1; // ensoleillement relatif (évaporation)
+    this.wind = 3.5; // vitesse du vent (m/s), souffle vers +x
+    this.cf = CF;
+    this.nu3 = NU3;
+    this.foamSum = 0;
     this.time = 0;
     this.frameCount = 0;
     this.shade = { x: 0, z: 0, r2: 0 };
@@ -68,6 +83,14 @@ export class Sim {
     this.m = new Float32Array(n); // humidité (0..1)
     this.qx = new Float32Array(n); // débit linéique (m²/s) face x+
     this.qz = new Float32Array(n);
+    this.qx2 = new Float32Array(n);
+    this.qz2 = new Float32Array(n);
+    this.ux = new Float32Array(n); // vitesse aux faces
+    this.uz = new Float32Array(n);
+    this.ux2 = new Float32Array(n);
+    this.uz2 = new Float32Array(n);
+    this.hx = new Float32Array(n); // hauteur d'eau aux faces
+    this.hz = new Float32Array(n);
     this.fac = new Float32Array(n);
     this.conc = new Float32Array(n);
     this.sed = new Float32Array(n); // sédiment en suspension (m)
@@ -144,6 +167,10 @@ export class Sim {
     }
     this.qx.fill(0);
     this.qz.fill(0);
+    this.ux.fill(0);
+    this.uz.fill(0);
+    this.hx.fill(0);
+    this.hz.fill(0);
     this.sed.fill(0);
     this.foam.fill(0);
     // la face sous le vent s'éboule jusqu'à l'angle de talus
@@ -155,6 +182,26 @@ export class Sim {
     }
     this.floodOcean();
     this.buildRenderData();
+  }
+
+  // restaure un relief sauvegardé (hauteurs + humidité)
+  setTerrain(sNew, mNew) {
+    const { N, s, w, m, bed } = this;
+    const n = N * N;
+    if (sNew.length !== n || mNew.length !== n) return false;
+    for (let i = 0; i < n; i++) {
+      const v = sNew[i];
+      if (!Number.isFinite(v)) return false;
+      s[i] = v < bed[i] ? bed[i] : v > 6 ? 6 : v;
+      const mo = mNew[i];
+      m[i] = mo < 0 ? 0 : mo > 1 ? 1 : mo;
+    }
+    for (let c = 0; c < this.spIdx.length; c++) if (this.spW[c] === 1) s[this.spIdx[c]] = -this.h0;
+    for (let i = 0; i < n; i++) w[i] = s[i] < 0 ? -s[i] : 0;
+    for (const a of [this.qx, this.qz, this.ux, this.uz, this.hx, this.hz, this.sed, this.foam]) a.fill(0);
+    this.floodOcean();
+    this.buildRenderData();
+    return true;
   }
 
   static capillary(h) {
@@ -201,7 +248,7 @@ export class Sim {
 
   // ---------- conditions aux limites : houle entrante ----------
   applyBoundary() {
-    const { waves, spIdx, spW, spSin, spCos, s, w, qx, qz, sed, cT, sT, swell } = this;
+    const { waves, spIdx, spW, spSin, spCos, s, w, qx, qz, ux, uz, hx, hz, sed, cT, sT, swell } = this;
     const nw = waves.length;
     for (let j = 0; j < nw; j++) {
       cT[j] = Math.cos(waves[j].om * this.time) * waves[j].A * swell;
@@ -226,15 +273,19 @@ export class Sim {
       w[i] = wi > 0 ? wi : 0;
       qx[i] += g * (qxa - qx[i]);
       qz[i] += g * (qza - qz[i]);
+      if (hx[i] > 0) ux[i] = qx[i] / hx[i];
+      if (hz[i] > 0) uz[i] = qz[i] / hz[i];
       sed[i] *= 1 - g;
     }
   }
 
   // ---------- Saint-Venant : quantité de mouvement ----------
   updateFlux(dt) {
-    const { N, s, w, qx, qz, dx } = this;
+    const { N, s, w, qx, qz, qx2, qz2, ux, uz, ux2, uz2, hx, hz, dx, cf, nu3 } = this;
     const k = (dt * G) / dx;
+    const r = dt / dx;
     const vmax = (0.4 * dx) / dt;
+    // 1. hauteur d'eau sur chaque face (la vitesse u est la variable transportée)
     for (let z = 0; z < N; z++) {
       let i = z * N;
       for (let x = 0; x < N - 1; x++, i++) {
@@ -244,14 +295,12 @@ export class Sim {
           ej = sj + w[i + 1];
         const hf = (ei > ej ? ei : ej) - (si > sj ? si : sj);
         if (hf <= 1e-4) {
-          qx[i] = 0;
-          continue;
-        }
-        let q = qx[i] + k * hf * (ei - ej);
-        q /= 1 + (dt * (CF * (q < 0 ? -q : q) + NU3)) / (hf * hf);
-        const qm = hf * vmax;
-        qx[i] = q > qm ? qm : q < -qm ? -qm : q;
+          hx[i] = 0;
+          ux[i] = 0;
+        } else hx[i] = hf;
       }
+      hx[i] = 0;
+      ux[i] = 0;
     }
     for (let z = 0; z < N - 1; z++) {
       let i = z * N;
@@ -263,20 +312,107 @@ export class Sim {
           ej = sj + w[j];
         const hf = (ei > ej ? ei : ej) - (si > sj ? si : sj);
         if (hf <= 1e-4) {
-          qz[i] = 0;
-          continue;
-        }
-        let q = qz[i] + k * hf * (ei - ej);
-        q /= 1 + (dt * (CF * (q < 0 ? -q : q) + NU3)) / (hf * hf);
-        const qm = hf * vmax;
-        qz[i] = q > qm ? qm : q < -qm ? -qm : q;
+          hz[i] = 0;
+          uz[i] = 0;
+        } else hz[i] = hf;
       }
     }
+    for (let i = (N - 1) * N; i < N * N; i++) {
+      hz[i] = 0;
+      uz[i] = 0;
+    }
+    // 2. faces x : advection amont + gradient de pression + frottement
+    for (let z = 0; z < N; z++) {
+      let i = z * N;
+      const inner = z > 0 && z < N - 1;
+      for (let x = 0; x < N - 1; x++, i++) {
+        const hf = hx[i];
+        if (hf === 0) {
+          qx2[i] = 0;
+          ux2[i] = 0;
+          continue;
+        }
+        const u = ux[i];
+        let un = u + k * (s[i] + w[i] - s[i + 1] - w[i + 1]);
+        if (inner) {
+          // flux de quantité de mouvement entrants (schéma conservatif amont)
+          let adv = 0;
+          const qe = qx[i] + qx[i + 1];
+          if (qe < 0) adv += qe * (ux[i + 1] - u);
+          const qw = qx[i - 1] + qx[i];
+          if (qw > 0) adv -= qw * (ux[i - 1] - u);
+          const qn = qz[i] + qz[i + 1];
+          if (qn < 0) adv += qn * (ux[i + N] - u);
+          const qs = qz[i - N] + qz[i + 1 - N];
+          if (qs > 0) adv -= qs * (ux[i - N] - u);
+          if (adv !== 0) {
+            let hb = 0.5 * (w[i] + w[i + 1]);
+            if (hb < 0.5 * hf) hb = 0.5 * hf;
+            let da = (0.5 * r * adv) / hb;
+            if (da > vmax) da = vmax;
+            else if (da < -vmax) da = -vmax;
+            un -= da;
+          }
+        }
+        un /= 1 + (dt * (cf * (un < 0 ? -un : un) + nu3 / hf)) / hf;
+        un = un > vmax ? vmax : un < -vmax ? -vmax : un;
+        ux2[i] = un;
+        qx2[i] = un * hf;
+      }
+      qx2[i] = 0;
+      ux2[i] = 0;
+    }
+    // 3. faces z
+    for (let z = 0; z < N - 1; z++) {
+      let i = z * N;
+      const innerZ = z > 0;
+      for (let x = 0; x < N; x++, i++) {
+        const hf = hz[i];
+        if (hf === 0) {
+          qz2[i] = 0;
+          uz2[i] = 0;
+          continue;
+        }
+        const u = uz[i];
+        let un = u + k * (s[i] + w[i] - s[i + N] - w[i + N]);
+        if (innerZ && x > 0 && x < N - 1) {
+          let adv = 0;
+          const qe = qz[i] + qz[i + N];
+          if (qe < 0) adv += qe * (uz[i + N] - u);
+          const qw = qz[i - N] + qz[i];
+          if (qw > 0) adv -= qw * (uz[i - N] - u);
+          const qn = qx[i] + qx[i + N];
+          if (qn < 0) adv += qn * (uz[i + 1] - u);
+          const qs = qx[i - 1] + qx[i - 1 + N];
+          if (qs > 0) adv -= qs * (uz[i - 1] - u);
+          if (adv !== 0) {
+            let hb = 0.5 * (w[i] + w[i + N]);
+            if (hb < 0.5 * hf) hb = 0.5 * hf;
+            let da = (0.5 * r * adv) / hb;
+            if (da > vmax) da = vmax;
+            else if (da < -vmax) da = -vmax;
+            un -= da;
+          }
+        }
+        un /= 1 + (dt * (cf * (un < 0 ? -un : un) + nu3 / hf)) / hf;
+        un = un > vmax ? vmax : un < -vmax ? -vmax : un;
+        uz2[i] = un;
+        qz2[i] = un * hf;
+      }
+    }
+    this.qx = qx2;
+    this.qx2 = qx;
+    this.qz = qz2;
+    this.qz2 = qz;
+    this.ux = ux2;
+    this.ux2 = ux;
+    this.uz = uz2;
+    this.uz2 = uz;
   }
 
   // ---------- Saint-Venant : conservation de la masse (+ sédiments) ----------
   updateDepth(dt) {
-    const { N, w, qx, qz, fac, conc, sed, dx } = this;
+    const { N, w, qx, qz, ux, uz, fac, conc, sed, dx } = this;
     const r = dt / dx;
     fac.fill(1);
     for (let z = 1; z < N - 1; z++) {
@@ -296,16 +432,22 @@ export class Sim {
       let i = z * N;
       for (let x = 0; x < N - 1; x++, i++) {
         const q = qx[i];
-        if (q > 0) qx[i] = q * fac[i];
-        else if (q < 0) qx[i] = q * fac[i + 1];
+        const f = q > 0 ? fac[i] : fac[i + 1];
+        if (f < 1) {
+          qx[i] = q * f;
+          ux[i] *= f;
+        }
       }
     }
     for (let z = 0; z < N - 1; z++) {
       let i = z * N;
       for (let x = 0; x < N; x++, i++) {
         const q = qz[i];
-        if (q > 0) qz[i] = q * fac[i];
-        else if (q < 0) qz[i] = q * fac[i + N];
+        const f = q > 0 ? fac[i] : fac[i + N];
+        if (f < 1) {
+          qz[i] = q * f;
+          uz[i] *= f;
+        }
       }
     }
     for (let z = 1; z < N - 1; z++) {
@@ -334,7 +476,7 @@ export class Sim {
   // ---------- érosion / dépôt / écume ----------
   erosion(dt) {
     const { N, s, w, qx, qz, sed, foam, bed, inSponge } = this;
-    const decay = Math.exp(-1.1 * dt);
+    const decay = Math.exp(-1.5 * dt);
     for (let z = 1; z < N - 1; z++) {
       let i = z * N + 1;
       for (let x = 1; x < N - 1; x++, i++) {
@@ -358,11 +500,11 @@ export class Sim {
           let src = sp2 > 0.2 && wi > 0.012 ? (fr2 - 0.9) * 0.8 : 0;
           if (src > 0) {
             if (src > 1) src = 1;
-            f += 4 * dt * src * (1 - f);
+            f += 3 * dt * src * (1 - f);
           }
           if (!inSponge[i]) {
             const speed = Math.sqrt(sp2);
-            const cap = speed > UCRIT ? KC * (speed - UCRIT) * (wi < 0.2 ? wi : 0.2) : 0;
+            const cap = speed > UCRIT ? KC * (speed - UCRIT) * (wi < 0.05 ? wi : 0.05) : 0;
             const d = cap - sed[i];
             if (d > 0) {
               let e = KE * dt * d;
@@ -439,12 +581,73 @@ export class Sim {
     return moved;
   }
 
+  // ---------- vent : saltation du sable sec ----------
+  // Le vent souffle vers +x. Sur chaque ligne on suit le flux de sable q
+  // (m²/s) : il tend vers la capacité de transport de Kawamura
+  //   q_sat = KQ·(U - Ut)·(U + Ut)²   pour U > Ut,
+  // U étant accéléré sur les pentes au vent et nul dans la zone d'ombre
+  // derrière les crêtes. Le relief évolue selon Exner : ∂s/∂t = -∂q/∂x.
+  windTransport(dt) {
+    const U0 = this.wind;
+    if (U0 * 1.6 <= WIND_T) return;
+    const { N, s, w, m, bed, dx } = this;
+    const kSat = Math.min(1, dx / L_SAT),
+      kDep = Math.min(1, dx / L_DEP);
+    const drop = TAN_SHADOW * dx;
+    const r = dt / dx;
+    for (let z = 1; z < N - 1; z++) {
+      let i = z * N + 1;
+      let q = 0;
+      let hor = -1e9;
+      for (let x = 1; x < N - 1; x++, i++) {
+        const h = s[i];
+        if (w[i] > 2e-3) {
+          // le sable tombe à l'eau
+          if (q > 0) {
+            s[i] = h + q * r;
+            q = 0;
+          }
+          hor = -1e9;
+          continue;
+        }
+        hor -= drop;
+        let cap = 0;
+        if (h >= hor) {
+          hor = h;
+          const mi = m[i];
+          if (mi < 0.2) {
+            const slope = (s[i + 1] - s[i - 1]) / (2 * dx);
+            let sh = 1 + 2.2 * slope;
+            sh = sh < 0.4 ? 0.4 : sh > 1.6 ? 1.6 : sh;
+            const U = U0 * sh;
+            const Ut = WIND_T * (1 + 8 * mi);
+            if (U > Ut) cap = KQ * (U - Ut) * (U + Ut) * (U + Ut);
+          }
+        }
+        let dq = (cap - q) * (cap > q ? kSat : kDep);
+        if (dq === 0) continue;
+        let ds = -dq * r; // Exner
+        if (ds < 0) {
+          const av = bed[i] - h;
+          if (ds < av) ds = av;
+          dq = -ds / r;
+        } else {
+          // dépôt de sable sec
+          const f = ds * 12;
+          m[i] -= m[i] * (f > 1 ? 1 : f);
+        }
+        s[i] = h + ds;
+        q += dq;
+      }
+    }
+  }
+
   // ---------- humidité du sable ----------
   moisture(dt) {
     const { N, L, s, w, m, ocean, dx, shade } = this;
     const dm = Math.min(0.2, (1.5e-3 * dt) / (dx * dx)); // diffusion latérale
     const capRate = Math.min(1, 2 * dt);
-    const evap = EVAP * dt * this.sun;
+    const evap = EVAP * dt * this.sun * (0.55 + this.wind / 8); // Dalton : ∝ (a + b·U)
     for (let z = 1; z < N - 1; z++) {
       let i = z * N + 1;
       const wz = (z / (N - 1) - 0.5) * L - shade.z;
@@ -521,7 +724,9 @@ export class Sim {
   buildRenderData() {
     const { N, s, w, m, foam, tex } = this;
     const n = N * N;
+    let fs = 0;
     for (let i = 0, k = 0; i < n; i++, k += 4) {
+      fs += foam[i];
       const si = s[i],
         wi = w[i];
       let eta;
@@ -558,6 +763,7 @@ export class Sim {
       tex[k + 2] = m[i];
       tex[k + 3] = foam[i];
     }
+    this.foamSum = fs; // énergie de déferlement (pilote le son du ressac)
   }
 
   // ---------- boucle ----------
@@ -577,6 +783,7 @@ export class Sim {
     this.avalanche();
     this.frameCount++;
     if (this.frameCount & 1) this.moisture(total * 2);
+    else this.windTransport(total * 2);
     if (this.frameCount % 20 === 0) this.floodOcean();
     this.buildRenderData();
   }

@@ -9,9 +9,20 @@ uniform float uPR;  // rayon de la toile
 uniform vec3 uPB;   // pied du mât
 uniform vec4 uTool; // centre de l'outil tenu (xyz) et rayon de son ombre
 
-const vec3 SUN_COL = vec3(1.0, 0.93, 0.80) * 3.2;
-const vec3 SKY_AMB = vec3(0.36, 0.50, 0.74) * 0.95;
-const vec3 GND_AMB = vec3(0.50, 0.42, 0.30) * 0.40;
+// éclairage : dépend de l'heure (calculé dans world.js)
+uniform vec3 uSunCol;
+uniform vec3 uSkyAmb;
+uniform vec3 uGndAmb;
+uniform vec3 uZen;        // ciel au zénith
+uniform vec3 uHor;        // horizon côté soleil
+uniform vec3 uHor2;       // horizon à l'opposé
+uniform vec3 uCloudDark;
+uniform vec3 uCloudLit;
+uniform vec2 uGlow;       // halo large / serré autour du soleil
+uniform float uWind;      // vent normalisé 0..1
+#define SUN_COL uSunCol
+#define SKY_AMB uSkyAmb
+#define GND_AMB uGndAmb
 
 float hash12(vec2 p){
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -32,17 +43,21 @@ float fbm(vec2 p){
 
 vec3 skyColor(vec3 d, float sunDisc){
   float h = clamp(d.y, 0.0, 1.0);
-  vec3 col = mix(vec3(0.56, 0.72, 0.88), vec3(0.10, 0.27, 0.62), pow(h, 0.5));
   float mu = max(dot(d, uSunDir), 0.0);
-  col += vec3(1.0, 0.8, 0.55) * (pow(mu, 6.0) * 0.10 + pow(mu, 48.0) * 0.30);
+  // l'horizon est plus chaud du côté du soleil
+  float side = 0.5 + 0.5 * dot(normalize(d.xz + 1e-5), normalize(uSunDir.xz + 1e-5));
+  vec3 hor = mix(uHor2, uHor, side * side);
+  vec3 col = mix(hor, uZen, pow(h, 0.5));
+  vec3 tint = uSunCol / max(max(uSunCol.r, uSunCol.g), uSunCol.b);
+  col += tint * (pow(mu, 6.0) * uGlow.x + pow(mu, 48.0) * uGlow.y);
   if (d.y > 0.015) {
-    vec2 cp = d.xz / (d.y + 0.12) * 0.85 + uTime * vec2(0.006, 0.002);
+    vec2 cp = d.xz / (d.y + 0.12) * 0.85 + uTime * vec2(0.004 + 0.012 * uWind, 0.002);
     float n = fbm(cp);
-    float c = smoothstep(0.50, 0.80, n) * smoothstep(0.015, 0.22, d.y);
-    vec3 cc = mix(vec3(0.80, 0.85, 0.93), vec3(1.25, 1.2, 1.12), smoothstep(0.55, 0.9, n));
+    float c = smoothstep(0.50, 0.80, n) * smoothstep(0.035, 0.30, d.y);
+    vec3 cc = mix(uCloudDark, uCloudLit, smoothstep(0.55, 0.9, n) * (0.55 + 0.45 * pow(mu, 3.0)));
     col = mix(col, cc, c * 0.9);
   }
-  col += sunDisc * vec3(1.0, 0.95, 0.8) * 50.0 * smoothstep(0.99975, 0.99992, mu);
+  col += sunDisc * tint * 50.0 * smoothstep(0.99975, 0.99992, mu);
   return col;
 }
 
@@ -106,7 +121,7 @@ void main(){
   vec3 d = normalize(vDir);
   vec3 col = skyColor(d, 1.0);
   // sous l'horizon : brume
-  col = mix(col, vec3(0.50, 0.66, 0.82), smoothstep(0.0, -0.08, d.y));
+  col = mix(col, skyColor(normalize(vec3(d.x, 0.0, d.z)), 0.0) * 0.93, smoothstep(0.0, -0.08, d.y));
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -219,7 +234,7 @@ void main(){
   vec3 sun = SUN_COL * ndl * sh;
   if (depth > 0.0) {
     float ca = caustic(p, uTime);
-    sun *= mix(1.0, 0.72 + 0.95 * ca, under * exp(-depth * 0.6) * (1.0 - smoothstep(12.0, 45.0, dist)));
+    sun *= mix(1.0, 0.80 + 0.62 * ca, under * exp(-depth * 0.6) * (1.0 - smoothstep(12.0, 45.0, dist)));
   }
   vec3 amb = mix(GND_AMB, SKY_AMB, N.y * 0.5 + 0.5) * ao;
   vec3 col = albedo * (sun + amb);
@@ -314,7 +329,15 @@ void main(){
   V /= dist;
 
   float shallow = smoothstep(0.0, 0.12, depth);
-  vec2 sl = vSlope + detailSlope(vXZ0, uTime, dist) * shallow * (0.3 + 0.7 * min(uSwell, 1.5));
+  vec2 base = vSlope;
+#ifndef SIM
+  // au large, la géométrie s'aplatit mais la houle reste visible dans les
+  // reflets : pentes analytiques par pixel, estompées avant l'horizon
+  vec2 ws; vec2 wd;
+  swellWave(vXZ0, uTime, ws, wd);
+  base = mix(ws * uSwell * (1.0 - smoothstep(120.0, 520.0, dist)), vSlope, vInfo.z);
+#endif
+  vec2 sl = base + detailSlope(vXZ0, uTime, dist) * shallow * (0.2 + 0.4 * min(uSwell, 1.5) + 0.9 * uWind);
   vec3 N = normalize(vec3(-sl.x, 1.0, -sl.y));
   float ndv = max(dot(N, V), 0.03);
 
@@ -330,7 +353,7 @@ void main(){
   vec3 bg = texture2D(uScene, suv + off).rgb;
   float cosr = sqrt(1.0 - (1.0 - ndv * ndv) / 1.777);   // Snell-Descartes, n = 1,333
   vec3 T = exp(-vec3(0.85, 0.20, 0.13) * depth / cosr);
-  float psh = parasolShadow(vWorld);
+  float psh = parasolShadow(vWorld) * toolShadow(vWorld);
   vec3 light = SUN_COL * max(uSunDir.y, 0.0) * (0.3 + 0.7 * psh) + SKY_AMB;
   vec3 col = bg * T + vec3(0.012, 0.085, 0.10) * light * (1.0 - T);
 
@@ -341,12 +364,12 @@ void main(){
 
   // écume
   float fn = fbm(vXZ0 * 4.0 + uTime * vec2(0.06, 0.03)) * 0.65 + vnoise(vXZ0 * 19.0 - uTime * vec2(0.05, 0.08)) * 0.35;
-  float fm = smoothstep(0.50, 0.66, vInfo.y * 0.75 + fn * 0.55) * smoothstep(0.03, 0.25, vInfo.y);
-  col = mix(col, vec3(0.95, 0.98, 1.0) * light * 0.42, fm * smoothstep(0.002, 0.012, depth));
+  float fm = smoothstep(0.52, 0.70, vInfo.y * 0.42 + fn * 0.62) * smoothstep(0.03, 0.25, vInfo.y);
+  col = mix(col, vec3(0.95, 0.98, 1.0) * light * 0.42, fm * 0.92 * smoothstep(0.003, 0.025, depth));
 
   // perspective atmosphérique vers l'horizon
   float fog = 1.0 - exp(-dist * dist / (650.0 * 650.0));
-  col = mix(col, vec3(0.54, 0.70, 0.86), fog);
+  col = mix(col, skyColor(normalize(vec3(-V.x, 0.0, -V.z)), 0.0) * 0.96, fog);
 
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
@@ -356,23 +379,43 @@ void main(){
 export const PARTICLE_VERT = /* glsl */ `
 attribute vec4 aColor;
 attribute float aSize;
+attribute vec3 aVel;
+attribute float aStretch;
 uniform float uScale;
+uniform vec2 uHalfRes;
 varying vec4 vColor;
+varying vec3 vDir;   // direction écran (xy) et facteur d'étirement (z)
 void main(){
   vColor = aColor;
   vec4 mv = viewMatrix * vec4(position, 1.0);
-  gl_PointSize = aSize * uScale / max(-mv.z, 0.1);
-  gl_Position = projectionMatrix * mv;
+  vec4 c0 = projectionMatrix * mv;
+  float base = aSize * uScale / max(-mv.z, 0.1);
+  float stretch = 1.0;
+  vec2 dir = vec2(0.0, 1.0);
+  if (aStretch > 0.0) {
+    // traînée : déplacement écran pendant un court temps de pose
+    vec4 c1 = projectionMatrix * (mv + vec4(mat3(viewMatrix) * aVel * 0.035 * aStretch, 0.0));
+    vec2 dpx = (c1.xy / c1.w - c0.xy / c0.w) * uHalfRes;
+    float len = length(dpx);
+    if (len > 0.5) { dir = dpx / len; stretch = 1.0 + min(len / max(base, 1.0), 4.0); }
+  }
+  vDir = vec3(dir, stretch);
+  gl_PointSize = base * stretch;
+  gl_Position = c0;
 }`;
 
 export const PARTICLE_FRAG = /* glsl */ `
+uniform vec3 uLight;
 varying vec4 vColor;
+varying vec3 vDir;
 void main(){
   vec2 c = gl_PointCoord - 0.5;
-  float r = dot(c, c) * 4.0;
+  c.y = -c.y;
+  float along = dot(c, vDir.xy), perp = dot(c, vec2(-vDir.y, vDir.x));
+  float r = 4.0 * (along * along + perp * perp * vDir.z * vDir.z);
   if (r > 1.0) discard;
-  float shade = 1.0 - 0.35 * r + 0.25 * max(0.0, -c.y - c.x);
-  gl_FragColor = vec4(vColor.rgb * shade, vColor.a * (1.0 - r * r));
+  float shade = 1.0 - 0.35 * r + 0.25 * max(0.0, c.y - c.x);
+  gl_FragColor = vec4(vColor.rgb * uLight * shade, vColor.a * (1.0 - r * r));
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }`;
