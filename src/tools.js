@@ -155,11 +155,32 @@ export class Tools {
     const t = { shovel: this.shovel, bucket: this.bucket, water: this.can }[this.current];
     return t && t.group.visible ? t.group : null;
   }
-  get shadowRadius() {
-    return this.current === 'shovel' ? 0.15 : this.current === 'bucket' ? 0.31 : 0.2;
-  }
-  get shadowLift() {
-    return this.current === 'shovel' ? 0.15 : 0;
+  // forme de l'ombre portée de l'outil tenu : une capsule [A,B] + une sphère
+  shadowShape(A, B, S) {
+    const g = this.activeGroup();
+    if (!g) return false;
+    g.updateMatrixWorld(true);
+    const v = this.v;
+    const put = (x, y, z) => g.localToWorld(v.set(x, y, z));
+    if (this.current === 'shovel') {
+      put(0, 0.34, 0);
+      A.set(v.x, v.y, v.z, 0.024);
+      B.copy(put(0, 1.28, 0));
+      put(0, 0.16, 0);
+      S.set(v.x, v.y, v.z, this.shovel.load > 0 ? 0.14 : 0.115);
+    } else if (this.current === 'bucket') {
+      put(0, -0.07, 0);
+      A.set(v.x, v.y, v.z, 0.27);
+      B.copy(put(0, 0.07, 0));
+      S.w = 0;
+    } else {
+      put(0, 0.03, 0.15);
+      A.set(v.x, v.y, v.z, 0.03);
+      B.copy(put(0, 0.2, 0.5));
+      put(0, 0, 0);
+      S.set(v.x, v.y, v.z, 0.185);
+    }
+    return true;
   }
 
   status() {

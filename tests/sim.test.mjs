@@ -161,4 +161,27 @@ check('toujours fini', finite(sim.w) && finite(sim.s) && finite(sim.m) && finite
   check('vent : champs finis', finite(d.s) && finite(d.m));
 }
 
+// 9. ombres : un mur de 0,5 m projette une ombre de longueur h / tan(élévation)
+{
+  const { ShadowMap, SHADOW_K } = await import('../src/shadow.js');
+  const d = new Sim({ N: 240, L: 26, waves: makeSwell(1.2) });
+  const sm = new ShadowMap(d, 2);
+  const n = d.N, M = sm.M;
+  d.s.fill(0.2);
+  for (let z = 60; z < 180; z++) for (let x = 118; x <= 122; x++) d.s[x + z * n] = 0.7;
+  const dec = (b) => { const t = (2 * b - 255) / 255; return (SHADOW_K * t) / (1.004 - Math.abs(t)); };
+  for (const el of [0.3, 0.6, 1.0]) {
+    sm.update({ x: Math.cos(el), y: Math.sin(el), z: 0 }); // soleil côté +x → ombre vers -x
+    let far = 2 * 118;
+    for (let X = 2 * 118; X > 0; X--) { if (dec(sm.tex[2 * (X + 240 * M)]) > 0) far = X; else if (X < 2 * 117) break; }
+    const len = (2 * 118 - far) * (d.dx / 2), th = 0.5 / Math.tan(el);
+    check(`ombre : soleil à ${Math.round((el * 180) / Math.PI)}°`, Math.abs(len - th) < 0.09, `${len.toFixed(2)} m, théorie ${th.toFixed(2)} m`);
+  }
+  // calcul étalé sur plusieurs images = calcul direct
+  const ref = Uint8Array.from(sm.tex);
+  sm.begin({ x: Math.cos(1.0), y: Math.sin(1.0), z: 0 });
+  let steps = 0; while (!sm.step(100)) steps++;
+  check('ombre : calcul étalé identique', steps > 2 && ref.every((v, i) => v === sm.tex[i]));
+}
+
 process.exit(failed ? 1 : 0);

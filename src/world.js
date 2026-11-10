@@ -2,6 +2,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { wavesGLSL } from './waves.js';
 import { SKY_VERT, SKY_FRAG, SAND_VERT, SAND_FRAG, waterVert, waterFrag } from './shaders.js';
+import { ShadowMap, SHADOW_K } from './shadow.js';
 
 function gridGeometry(N, L) {
   const pos = new Float32Array(N * N * 3);
@@ -103,11 +104,22 @@ export function createWorld(renderer, sim, swell, detail, quality) {
   const scene = new THREE.Scene();
   const sunDir = new THREE.Vector3(0.52, 0.72, 0.46).normalize();
 
-  const floatLinear = renderer.extensions.has('OES_texture_float_linear');
+  // lue aux centres des texels par les vertex shaders : pas besoin de filtrage
   const dataTex = new THREE.DataTexture(sim.tex, N, N, THREE.RGBAFormat, THREE.FloatType);
-  dataTex.minFilter = dataTex.magFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
+  dataTex.minFilter = dataTex.magFilter = THREE.NearestFilter;
   dataTex.wrapS = dataTex.wrapT = THREE.ClampToEdgeWrapping;
   dataTex.needsUpdate = true;
+
+  // ombres du relief : texture 8 bits, filtrable sur tous les appareils
+  const shadowMap = new ShadowMap(sim);
+  const shadowTex = new THREE.DataTexture(shadowMap.tex, shadowMap.M, shadowMap.M, THREE.RGFormat, THREE.UnsignedByteType);
+  shadowTex.minFilter = shadowTex.magFilter = THREE.LinearFilter;
+  shadowTex.wrapS = shadowTex.wrapT = THREE.ClampToEdgeWrapping;
+  shadowTex.unpackAlignment = 1;
+  const K = SHADOW_K.toFixed(4);
+  let shadowDirty = true,
+    shadowBusy = false;
+  const shadowRows = Math.ceil(shadowMap.M / 4);
 
   const U = {
     uTime: { value: 0 },
@@ -116,7 +128,12 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     uPN: { value: new THREE.Vector3(0, 1, 0) },
     uPR: { value: 1.4 },
     uPB: { value: new THREE.Vector3() },
-    uTool: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uToolA: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uToolB: { value: new THREE.Vector3() },
+    uTool2: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uShadow: { value: null },
+    uShadowDrop: { value: 0.1 },
+    uShadowTexel: { value: 1 / shadowMap.M },
     uSunCol: { value: new THREE.Vector3() },
     uSkyAmb: { value: new THREE.Vector3() },
     uGndAmb: { value: new THREE.Vector3() },
@@ -138,6 +155,8 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     uRes: { value: new THREE.Vector2(1, 1) },
   };
 
+  U.uShadow.value = shadowTex;
+
   // ciel
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(1, 32, 16),
@@ -156,24 +175,22 @@ export function createWorld(renderer, sim, swell, detail, quality) {
 
   // sable
   const grid = gridGeometry(N, L);
-  const steps = quality === 'low' ? 10 : 18;
-  const sandDefs = { SHADOW_STEPS: steps, SHADOW_GROW: steps === 10 ? '1.55' : '1.28' };
   const sand = new THREE.Mesh(
     grid,
-    new THREE.ShaderMaterial({ uniforms: U, vertexShader: SAND_VERT, fragmentShader: SAND_FRAG, defines: sandDefs })
+    new THREE.ShaderMaterial({ uniforms: U, vertexShader: SAND_VERT, fragmentShader: SAND_FRAG, defines: { SHADOW_K: K } })
   );
   sand.frustumCulled = false;
   scene.add(sand);
 
   // fond marin au-delà de la zone simulée
-  const bedGeo = new THREE.PlaneGeometry(700, 700, 1, 1).rotateX(-Math.PI / 2);
+  const bedGeo = new THREE.PlaneGeometry(180, 180, 1, 1).rotateX(-Math.PI / 2);
   const seabed = new THREE.Mesh(
     bedGeo,
     new THREE.ShaderMaterial({
       uniforms: U,
       vertexShader: SAND_VERT,
       fragmentShader: SAND_FRAG,
-      defines: { ...sandDefs, FLAT: 1 },
+      defines: { SHADOW_K: K, FLAT: 1 },
     })
   );
   seabed.position.y = -h0 - 0.004;
@@ -182,7 +199,12 @@ export function createWorld(renderer, sim, swell, detail, quality) {
   // eau
   const wg = wavesGLSL(swell, detail);
   const waterMat = (defines) =>
-    new THREE.ShaderMaterial({ uniforms: U, vertexShader: waterVert(wg), fragmentShader: waterFrag(wg), defines });
+    new THREE.ShaderMaterial({
+      uniforms: U,
+      vertexShader: waterVert(wg),
+      fragmentShader: waterFrag(wg),
+      defines: { SHADOW_K: K, ...defines },
+    });
   const water = [];
   const simWater = new THREE.Mesh(grid, waterMat({ SIM: 1 }));
   simWater.frustumCulled = false;
@@ -263,6 +285,7 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     const nl = 0.25 + 0.4 * sunDir.y;
     light.set(sc.x * nl + sa.x * 0.8, sc.y * nl + sa.y * 0.8, sc.z * nl + sa.z * 0.8);
     sim.sun = Math.max(0.04, sunDir.y) / 0.8; // l'évaporation suit la hauteur du soleil
+    shadowDirty = true;
   }
   setTimeOfDay(15.5);
 
@@ -281,6 +304,24 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     U.uSwell.value = sim.swell;
     U.uWind.value = Math.min(1, sim.wind / 15);
     dataTex.needsUpdate = true;
+    // ombres : calcul étalé sur 4 images ; immédiat quand le soleil bouge
+    if (shadowDirty) {
+      shadowMap.update(sunDir);
+      shadowDirty = false;
+      shadowBusy = false;
+      U.uShadowDrop.value = shadowMap.drop;
+      shadowTex.needsUpdate = true;
+    } else {
+      if (!shadowBusy) {
+        shadowMap.begin(sunDir);
+        shadowBusy = true;
+      }
+      if (shadowMap.step(shadowRows)) {
+        shadowBusy = false;
+        U.uShadowDrop.value = shadowMap.drop;
+        shadowTex.needsUpdate = true;
+      }
+    }
 
     // parasol : le pied suit le sable, la toile oscille au vent comme un
     // pendule amorti  θ'' = -ω0²·θ - 2ζω0·θ' + F(t)

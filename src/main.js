@@ -46,8 +46,13 @@ function start() {
     else if (name === 'scoop') sound.scoop();
   };
 
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 9000);
-  const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true });
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.3, 7000);
+  // image de la scène sans l'eau, pour la réfraction (HDR si l'appareil le permet)
+  const hdr = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float');
+  const rt = new THREE.WebGLRenderTarget(4, 4, {
+    type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
+    depthBuffer: true,
+  });
   rt.texture.minFilter = rt.texture.magFilter = THREE.LinearFilter;
   U.uScene.value = rt.texture;
 
@@ -385,9 +390,10 @@ function start() {
     if (c && tools.current !== 'camera') cu.set(c.x, c.z, tools.radius, 1);
     else cu.w = 0;
     // ombre portée de l'outil tenu
-    const tg = tools.activeGroup();
-    if (tg) U.uTool.value.set(tg.position.x, tg.position.y + tools.shadowLift, tg.position.z, tools.shadowRadius);
-    else U.uTool.value.w = 0;
+    if (!tools.shadowShape(U.uToolA.value, U.uToolB.value, U.uTool2.value)) {
+      U.uToolA.value.w = 0;
+      U.uTool2.value.w = 0;
+    }
     const st = tools.status();
     if (st !== lastStatus) statusEl.textContent = lastStatus = st;
 

@@ -94,11 +94,11 @@ export class Particles {
       this.stretch[i] = 2.2;
       this.life[i] = 0.5 + r * 0.9;
     } else {
-      this.col[c] = 0.42;
-      this.col[c + 1] = 0.56;
-      this.col[c + 2] = 0.66;
-      this.col[c + 3] = kind === WATER ? 0.6 : 0.45;
-      this.size[i] = kind === WATER ? 0.03 + r * 0.03 : 0.018 + r * 0.018;
+      this.col[c] = 0.5;
+      this.col[c + 1] = 0.64;
+      this.col[c + 2] = 0.74;
+      this.col[c + 3] = kind === WATER ? 0.72 : 0.5;
+      this.size[i] = kind === WATER ? 0.02 + r * 0.02 : 0.014 + r * 0.016;
       this.stretch[i] = kind === WATER ? 1 : 0.6;
       this.life[i] = kind === WATER ? 6 : 0.3 + r * 0.3;
     }

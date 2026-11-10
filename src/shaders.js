@@ -7,7 +7,9 @@ uniform vec3 uPC;   // centre du bord de la toile du parasol
 uniform vec3 uPN;   // axe du parasol
 uniform float uPR;  // rayon de la toile
 uniform vec3 uPB;   // pied du mât
-uniform vec4 uTool; // centre de l'outil tenu (xyz) et rayon de son ombre
+uniform vec4 uToolA; // ombre de l'outil : capsule [A,B] de rayon A.w …
+uniform vec3 uToolB;
+uniform vec4 uTool2; // … plus une sphère (xyz, rayon)
 
 // éclairage : dépend de l'heure (calculé dans world.js)
 uniform vec3 uSunCol;
@@ -61,38 +63,41 @@ vec3 skyColor(vec3 d, float sunDisc){
   return col;
 }
 
-// Ombre analytique du parasol : intersection du rayon solaire avec le disque
-// de la toile, et distance rayon/segment pour le mât.
+// Ombre d'une capsule [a,b] de rayon r : plus courte distance entre le rayon
+// solaire issu de p et le segment. La pénombre s'élargit avec la distance
+// (diamètre apparent du soleil).
+float capsuleShadow(vec3 p, vec3 a, vec3 b, float r){
+  vec3 v = b - a;
+  vec3 w0 = p - a;
+  float bb = dot(uSunDir, v), c = dot(v, v), d = dot(uSunDir, w0), e = dot(v, w0);
+  float tc = clamp((e - bb * d) / max(c - bb * bb, 1e-5), 0.0, 1.0);
+  vec3 q = a + v * tc;
+  float sc = dot(uSunDir, q - p);
+  if (sc <= 0.0) return 1.0;
+  float soft = 0.006 + 0.012 * sc;
+  return smoothstep(r - soft, r + soft, length(p + uSunDir * sc - q));
+}
+
+// Ombre du parasol : intersection du rayon solaire avec le disque de la
+// toile, plus le mât.
 float parasolShadow(vec3 p){
   float sh = 1.0;
   float dn = dot(uSunDir, uPN);
   float t = dot(uPC - p, uPN) / dn;
   if (t > 0.0) {
     vec3 q = p + uSunDir * t;
-    float soft = 0.05 + 0.03 * t;
+    float soft = 0.012 + 0.014 * t;
     sh = smoothstep(uPR - soft, uPR + soft, length(q - uPC));
   }
-  vec3 v = uPC - uPB;
-  vec3 w0 = p - uPB;
-  float b = dot(uSunDir, v), c = dot(v, v), d = dot(uSunDir, w0), e = dot(v, w0);
-  float tc = clamp((e - b * d) / max(c - b * b, 1e-5), 0.0, 1.0);
-  float sc = dot(uSunDir, uPB + v * tc - p);
-  if (sc > 0.0) {
-    float dist = length(p + uSunDir * sc - (uPB + v * tc));
-    sh *= mix(0.35, 1.0, smoothstep(0.015, 0.05 + 0.02 * sc, dist));
-  }
-  return sh;
+  return sh * mix(0.12, 1.0, capsuleShadow(p, uPB, uPC, 0.028));
 }
 
-// ombre douce de l'outil tenu au-dessus du sable
+// ombre de l'outil tenu au-dessus du sable
 float toolShadow(vec3 p){
-  if (uTool.w <= 0.0) return 1.0;
-  vec3 v = uTool.xyz - p;
-  float along = dot(v, uSunDir);
-  if (along <= 0.0) return 1.0;
-  float d = length(v - uSunDir * along);
-  float soft = 0.04 + 0.12 * along;
-  return mix(0.5, 1.0, smoothstep(uTool.w - soft, uTool.w + soft, d));
+  float sh = 1.0;
+  if (uToolA.w > 0.0) sh *= capsuleShadow(p, uToolA.xyz, uToolB, uToolA.w);
+  if (uTool2.w > 0.0) sh *= capsuleShadow(p, uTool2.xyz, uTool2.xyz, uTool2.w);
+  return sh;
 }
 
 float caustic(vec2 p, float t){
@@ -135,6 +140,21 @@ uniform float uDx;
 vec2 w2uv(vec2 xz){ return (xz / uL + 0.5) * (1.0 - uTexel) + 0.5 * uTexel; }
 `;
 
+const SHADOW = /* glsl */ `
+uniform sampler2D uShadow;   // r: ligne d'ombre au-dessus du sol (codée), g: distance à l'obstacle
+uniform float uShadowDrop;
+uniform float uShadowTexel;
+// above : hauteur du point au-dessus du sable (0 pour le sable, profondeur pour l'eau)
+float terrainShadow(vec2 xz, float above){
+  vec2 sv = texture2D(uShadow, (xz / uL + 0.5) * (1.0 - uShadowTexel) + 0.5 * uShadowTexel).rg;
+  float t = sv.r * 2.0 - 1.0;
+  float d = SHADOW_K * t / (1.004 - abs(t)) - above;
+  // pénombre : s'élargit avec la distance à l'obstacle (diamètre apparent du soleil)
+  float w = min(0.012 + 0.2 * sv.g, 0.6 * uShadowDrop);
+  return 1.0 - smoothstep(-w, w, d);
+}
+`;
+
 export const SAND_VERT = /* glsl */ `
 ${GRID}
 varying vec3 vWorld;
@@ -167,23 +187,11 @@ void main(){
 export const SAND_FRAG = /* glsl */ `
 ${COMMON}
 ${GRID}
+${SHADOW}
 uniform vec4 uCursor;    // xz, rayon, intensité
 varying vec3 vWorld;
 varying vec3 vN;
 varying vec3 vD;
-
-float terrainShadow(vec3 p){
-  float res = 1.0;
-  float t = 0.07;
-  for (int i = 0; i < SHADOW_STEPS; i++) {
-    vec3 q = p + uSunDir * t;
-    float h = q.y - texture2D(uData, w2uv(q.xz)).r;
-    res = min(res, 9.0 * h / t);
-    if (res < 0.0) break;
-    t *= SHADOW_GROW;
-  }
-  return clamp(res, 0.0, 1.0);
-}
 
 float ripH(vec2 p){
   float n = vnoise(p * 0.6) + 0.5 * vnoise(p * 1.7);
@@ -228,15 +236,16 @@ void main(){
   float sh = 1.0;
   float ao = 1.0;
 #else
-  float sh = terrainShadow(vWorld + N * 0.012) * parasolShadow(vWorld) * toolShadow(vWorld);
-  float ao = clamp(1.0 - vD.z * 9.0, 0.45, 1.0);
+  float sh = terrainShadow(vWorld.xz, 0.0) * parasolShadow(vWorld) * toolShadow(vWorld);
+  float ao = clamp(1.0 - vD.z * 6.0, 0.62, 1.0);
 #endif
   vec3 sun = SUN_COL * ndl * sh;
   if (depth > 0.0) {
     float ca = caustic(p, uTime);
     sun *= mix(1.0, 0.80 + 0.62 * ca, under * exp(-depth * 0.6) * (1.0 - smoothstep(12.0, 45.0, dist)));
   }
-  vec3 amb = mix(GND_AMB, SKY_AMB, N.y * 0.5 + 0.5) * ao;
+  // ciel + lumière chaude renvoyée par le sable ensoleillé alentour
+  vec3 amb = (mix(GND_AMB, SKY_AMB, N.y * 0.5 + 0.5) + SUN_COL * vec3(0.80, 0.60, 0.38) * 0.07 * max(uSunDir.y, 0.0)) * ao;
   vec3 col = albedo * (sun + amb);
 
   // reflet du sable gorgé d'eau, scintillement des grains secs
@@ -274,10 +283,16 @@ ${wavesGLSL}
 void main(){
 #ifdef SIM
   vec4 d = texture2D(uData, uv);
-  float eL = texture2D(uData, uv - vec2(uTexel, 0.0)).g;
-  float eR = texture2D(uData, uv + vec2(uTexel, 0.0)).g;
-  float eD = texture2D(uData, uv - vec2(0.0, uTexel)).g;
-  float eU = texture2D(uData, uv + vec2(0.0, uTexel)).g;
+  // pente de la surface : uniquement entre points mouillés (sinon les berges
+  // raides fausseraient les reflets au bord de l'eau)
+  vec2 tL = texture2D(uData, uv - vec2(uTexel, 0.0)).rg;
+  vec2 tR = texture2D(uData, uv + vec2(uTexel, 0.0)).rg;
+  vec2 tD = texture2D(uData, uv - vec2(0.0, uTexel)).rg;
+  vec2 tU = texture2D(uData, uv + vec2(0.0, uTexel)).rg;
+  float eL = tL.g - tL.r > 0.0005 ? tL.g : d.g;
+  float eR = tR.g - tR.r > 0.0005 ? tR.g : d.g;
+  float eD = tD.g - tD.r > 0.0005 ? tD.g : d.g;
+  float eU = tU.g - tU.r > 0.0005 ? tU.g : d.g;
   vec3 p = vec3(position.x, d.g, position.z);
   vSlope = vec2(eR - eL, eU - eD) / (2.0 * uDx);
   vInfo = vec3(d.g - d.r, d.a, 1.0);
@@ -308,6 +323,8 @@ void main(){
 
 export const waterFrag = (wavesGLSL) => /* glsl */ `
 ${COMMON}
+${GRID}
+${SHADOW}
 uniform sampler2D uScene;
 uniform vec2 uRes;
 uniform float uSwell;
@@ -354,6 +371,9 @@ void main(){
   float cosr = sqrt(1.0 - (1.0 - ndv * ndv) / 1.777);   // Snell-Descartes, n = 1,333
   vec3 T = exp(-vec3(0.85, 0.20, 0.13) * depth / cosr);
   float psh = parasolShadow(vWorld) * toolShadow(vWorld);
+#ifdef SIM
+  psh *= terrainShadow(vXZ0, depth);
+#endif
   vec3 light = SUN_COL * max(uSunDir.y, 0.0) * (0.3 + 0.7 * psh) + SKY_AMB;
   vec3 col = bg * T + vec3(0.012, 0.085, 0.10) * light * (1.0 - T);
 
