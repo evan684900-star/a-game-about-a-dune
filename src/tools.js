@@ -310,6 +310,7 @@ export class Tools {
     this.onEvent = () => {}; // (nom, donnée) : sons, sauvegarde
     this.time = 0;
     this.tick = 0;
+    this.queued = false;
 
     this.shovel = { ...buildShovel(), load: 0, moist: 0, lean: 0.6, leanT: 0.6, h: 0.35, hT: 0.35 };
     this.trowel = { ...buildTrowel(), load: 0, mo: 0, h: 0.2, hT: 0.2, lean: 0.9 };
@@ -342,8 +343,33 @@ export class Tools {
     return true;
   }
 
+  // vide tous les outils (nouvelle île)
+  reset() {
+    this.busy = 0;
+    this.events.length = 0;
+    this.emit = null;
+    this.queued = false;
+    this.down = false;
+    const s = this.shovel;
+    s.load = 0;
+    s.mound.visible = false;
+    s.leanT = 0.6;
+    s.hT = 0.35;
+    this.trowel.load = 0;
+    this.trowel.mound.visible = false;
+    for (const b of [this.bucket, ...this.molds]) {
+      b.kind = null;
+      b.vol = 0;
+      b.content.visible = false;
+      b.flipT = 0;
+      b.sideT = 0;
+      b.hT = 0.5;
+    }
+  }
+
   setTool(name) {
     if (this.busy > 0) return false;
+    this.queued = false;
     this.current = name;
     this.down = false;
     return true;
@@ -513,7 +539,7 @@ export class Tools {
           b.vol = r.vol;
           b.moist = r.moist;
           b.kind = r.vol > 1e-3 ? 'sand' : null;
-          b.contentMat.color.copy(SAND_DRY).lerp(SAND_WET, Math.min(1, r.moist * 1.4));
+          b.contentMat.color.copy(SAND_DRY).lerp(SAND_WET, Math.min(1, r.moist * 3.3));
           b.contentMat.roughness = 1;
         }
         setFill();
@@ -569,7 +595,12 @@ export class Tools {
 
   onDown() {
     this.down = true;
-    if (this.busy > 0 || !this.cursor) return;
+    if (this.busy > 0) {
+      // clic pendant une animation : mémorisé, il partira dès qu'elle finit
+      this.queued = true;
+      return;
+    }
+    if (!this.cursor) return;
     const c = this.cursor;
     const sim = this.sim;
     if (this.current === 'shovel') {
@@ -584,7 +615,7 @@ export class Tools {
           s.load = r.vol;
           s.moist = r.moist;
           s.mound.visible = r.vol > 1e-4;
-          s.sandMat.color.copy(SAND_DRY).lerp(SAND_WET, Math.min(1, r.moist * 1.4));
+          s.sandMat.color.copy(SAND_DRY).lerp(SAND_WET, Math.min(1, r.moist * 3.3));
           s.hT = 0.35;
           s.leanT = r.vol > 1e-4 ? 1.2 : 0.6;
         });
@@ -637,6 +668,14 @@ export class Tools {
     const show = this.current !== 'camera' && (this.cursor || this.busy > 0);
     const act = this.active();
     for (const t of this.groups) t.group.visible = !!show && t === act;
+    if (this.queued && this.busy <= 0) {
+      this.queued = false;
+      if (this.cursor && (this.current === 'shovel' || this.current === 'bucket' || this.current === 'mold')) {
+        const held = this.down;
+        this.onDown();
+        this.down = held;
+      }
+    }
     const working = this.down && !!this.cursor && this.busy <= 0;
     this.tick -= dt;
 
@@ -657,7 +696,7 @@ export class Tools {
           tr.mo = (tr.mo * tr.load + r.moist * r.vol) / (tr.load + r.vol);
           tr.load += r.vol;
           tr.mound.visible = true;
-          tr.sandMat.color.copy(SAND_DRY).lerp(SAND_WET, Math.min(1, tr.mo * 1.4));
+          tr.sandMat.color.copy(SAND_DRY).lerp(SAND_WET, Math.min(1, tr.mo * 3.3));
           if (this.tick <= 0) {
             this.tick = 0.28;
             this.onEvent('scrape', r.moist);

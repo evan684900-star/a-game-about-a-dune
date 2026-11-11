@@ -77,7 +77,7 @@ export class Particles {
     const r = Math.random();
     const c = i * 4;
     if (kind === SAND) {
-      const d = 1 - 0.55 * Math.min(1, moist * 1.4);
+      const d = 1 - 0.55 * Math.min(1, moist * 3.3);
       this.col[c] = (0.74 + r * 0.2) * d;
       this.col[c + 1] = (0.55 + r * 0.15) * d;
       this.col[c + 2] = (0.31 + r * 0.1) * d;

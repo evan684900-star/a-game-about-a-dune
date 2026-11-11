@@ -49,8 +49,8 @@ vec3 skyColor(vec3 d, float sunDisc){
   // l'horizon est plus chaud du côté du soleil
   float side = 0.5 + 0.5 * dot(normalize(d.xz + 1e-5), normalize(uSunDir.xz + 1e-5));
   vec3 hor = mix(uHor2, uHor, side * side);
-  vec3 col = mix(hor, uZen, pow(h, 0.5));
-  vec3 tint = uSunCol / max(max(uSunCol.r, uSunCol.g), uSunCol.b);
+  vec3 col = mix(hor, uZen, sqrt(h));
+  vec3 tint = uSunCol / max(max(uSunCol.r, uSunCol.g), max(uSunCol.b, 1e-5));
   col += tint * (pow(mu, 6.0) * uGlow.x + pow(mu, 48.0) * uGlow.y);
   if (d.y > 0.015) {
     vec2 cp = d.xz / (d.y + 0.12) * 0.85 + uTime * vec2(0.004 + 0.012 * uWind, 0.002);
@@ -83,7 +83,7 @@ float capsuleShadow(vec3 p, vec3 a, vec3 b, float r){
 float parasolShadow(vec3 p){
   float sh = 1.0;
   float dn = dot(uSunDir, uPN);
-  float t = dot(uPC - p, uPN) / dn;
+  float t = dot(uPC - p, uPN) / (abs(dn) < 1e-5 ? 1e-5 : dn);
   if (t > 0.0) {
     vec3 q = p + uSunDir * t;
     float soft = 0.012 + 0.014 * t;
@@ -126,7 +126,7 @@ void main(){
   vec3 d = normalize(vDir);
   vec3 col = skyColor(d, 1.0);
   // sous l'horizon : brume
-  col = mix(col, skyColor(normalize(vec3(d.x, 0.0, d.z)), 0.0) * 0.93, smoothstep(0.0, -0.08, d.y));
+  col = mix(col, skyColor(normalize(vec3(d.x, 1e-4, d.z)), 0.0) * 0.93, smoothstep(0.0, -0.08, d.y));
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -208,7 +208,7 @@ void main(){
   vec2 p = vWorld.xz;
 
   float under = smoothstep(0.0, 0.03, depth);
-  float wet = max(smoothstep(0.03, 0.5, moist), under);
+  float wet = max(smoothstep(0.02, 0.30, moist), under);
 
   // rides éoliennes sur le sable sec et peu pentu
   float flat_ = smoothstep(0.80, 0.95, N.y);
@@ -395,7 +395,7 @@ void main(){
 
   // perspective atmosphérique vers l'horizon
   float fog = 1.0 - exp(-dist * dist / (650.0 * 650.0));
-  col = mix(col, skyColor(normalize(vec3(-V.x, 0.0, -V.z)), 0.0) * 0.96, fog);
+  col = mix(col, skyColor(normalize(vec3(-V.x, 1e-4, -V.z)), 0.0) * 0.96, fog);
 
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>

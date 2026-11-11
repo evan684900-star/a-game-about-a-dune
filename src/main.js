@@ -237,6 +237,11 @@ function start() {
   }
   for (const key in settings) {
     settings[key].el.addEventListener('input', (e) => setSetting(key, e.target.value));
+    // on rend le clavier au jeu dès que le curseur est lâché (sinon les
+    // chiffres sont ignorés et les flèches changent le réglage)
+    const release = (e) => e.target.blur();
+    settings[key].el.addEventListener('change', release);
+    settings[key].el.addEventListener('pointerup', release);
     setSetting(key, settings[key].el.value);
   }
 
@@ -311,8 +316,10 @@ function start() {
   window.addEventListener('pagehide', save);
 
   $('#reset').addEventListener('click', () => {
+    if (!window.confirm('Réinitialiser l’île ? Tout ce que tu as construit sera effacé.')) return;
     sim.reset();
     particles.clear();
+    tools.reset();
     try {
       localStorage.removeItem(SAVE_KEY);
     } catch (e) {}
