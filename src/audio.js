@@ -167,6 +167,17 @@ export class Sound {
     this.burst('lowpass', 900, 300, 0.14, 0.35, 0.5);
   }
 
+  // truelle qui racle
+  scrape(moist) {
+    const wet = Math.min(1, moist * 1.5);
+    this.burst('bandpass', 2600 - 1400 * wet, 1500 - 800 * wet, 0.16, 0.22, 1.2);
+  }
+
+  // main qui tapote le sable
+  pat() {
+    this.burst('lowpass', 500, 180, 0.09, 0.3, 0.6);
+  }
+
   // seau plongé dans l'eau
   scoop() {
     this.burst('bandpass', 500, 2400, 0.3, 0.4, 1.4);

@@ -184,4 +184,39 @@ check('toujours fini', finite(sim.w) && finite(sim.s) && finite(sim.m) && finite
   check('ombre : calcul étalé identique', steps > 2 && ref.every((v, i) => v === sm.tex[i]));
 }
 
+// 10. nouveaux outils : volume conservé, effets attendus
+{
+  const d = new Sim({ N: 240, L: 26, waves: makeSwell(1.2) });
+  d.swell = 0;
+  const v0 = d.totalSand();
+  // moule : mur de 0,45 m orienté à 30°
+  const wall = (u, v) => Math.max(0, Math.min(1, Math.min((0.58 - Math.abs(u)) / 0.05, (0.17 - Math.abs(v)) / 0.05)));
+  const h0 = d.heightAt(3, 2);
+  d.stampShape(3, 2, 0.6, wall, 0.45, 0.12, 0.5, Math.cos(0.5), Math.sin(0.5));
+  check('moule : volume exact', Math.abs(d.totalSand() - v0 - 0.12) < 1e-3);
+  for (let f = 0; f < 120; f++) d.frame(1 / 60);
+  check('moule : le mur humide tient', d.heightAt(3, 2) - h0 > 0.3, `h=${(d.heightAt(3, 2) - h0).toFixed(2)} m`);
+  check('moule : orienté', d.heightAt(3 + 0.45 * Math.cos(0.5), 2 + 0.45 * Math.sin(0.5)) - h0 > 0.25 && d.heightAt(3 - 0.45 * Math.sin(0.5), 2 + 0.45 * Math.cos(0.5)) - h0 < 0.1);
+  // main : lisse une bosse sans changer le volume, et tasse
+  d.addSand(-2, 3, 0.03, 0.5, 0.2);
+  const v1 = d.totalSand(), bump = d.heightAt(-2, 3);
+  for (let f = 0; f < 60; f++) d.pat(-2, 3, 0.3, 1 / 60);
+  check('main : lisse', d.heightAt(-2, 3) < bump - 0.03, `${bump.toFixed(2)} → ${d.heightAt(-2, 3).toFixed(2)} m`);
+  check('main : volume conservé', Math.abs(d.totalSand() - v1) < 1e-4);
+  check('main : tasse', d.sample(d.comp, -2, 3) > 0.7);
+  // un pâté sec tassé résiste mieux à l'effondrement qu'un pâté sec meuble
+  const loose = d.heightAt(0, -3), packed = d.heightAt(2, -3);
+  for (const x of [0, 2]) d.stampShape(x, -3, 0.3, (u, v) => Math.max(0, Math.min(1, (0.3 - Math.hypot(u, v)) / 0.06)), 0.5, 0.1, 0.0);
+  d.disc(0, -3, 0.5, (i) => { d.comp[i] = 0; });
+  d.disc(2, -3, 0.5, (i) => { d.comp[i] = 1; });
+  for (let f = 0; f < 200; f++) d.frame(1 / 60);
+  check('tassement : tient une pente plus raide', d.heightAt(2, -3) - packed > d.heightAt(0, -3) - loose + 0.02, `tassé ${(d.heightAt(2, -3) - packed).toFixed(2)} m, meuble ${(d.heightAt(0, -3) - loose).toFixed(2)} m`);
+  // tuyau : creuse, et le sable arraché n'est pas perdu
+  const v2 = d.totalSand(), hj = d.heightAt(-3, -2);
+  for (let k = 0; k < 230; k++) { d.jet(-3, -2, 1.5e-4, 5, 0); if (k % 4 === 0) d.frame(1 / 60); }
+  check('tuyau : creuse', d.heightAt(-3, -2) < hj - 0.03, `${(hj - d.heightAt(-3, -2)).toFixed(3)} m`);
+  check('tuyau : sable conservé', Math.abs(d.totalSand() - v2) < 2e-3, `Δ=${(d.totalSand() - v2).toExponential(1)} m³`);
+  check('outils : champs finis', finite(d.s) && finite(d.w) && finite(d.ux) && finite(d.comp));
+}
+
 process.exit(failed ? 1 : 0);

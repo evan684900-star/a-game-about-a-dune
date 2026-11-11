@@ -189,7 +189,9 @@ export class Particles {
           this.landedSand += this.vol[i];
           if (wat > 0.03 && Math.random() < 0.3) this.splash(x, sand + wat, z, 1);
         } else if (kind === WATER) {
-          sim.addWater(x, z, this.vol[i], 0.16);
+          // jet rapide : l'eau garde son élan et creuse à l'impact
+          if (vel[a] * vel[a] + vel[a + 2] * vel[a + 2] > 4) sim.jet(x, z, this.vol[i], vel[a], vel[a + 2]);
+          else sim.addWater(x, z, this.vol[i], 0.16);
           this.landedWater += this.vol[i];
           if (Math.random() < 0.3) this.splash(x, ground, z, 1);
         }

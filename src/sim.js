@@ -94,6 +94,7 @@ export class Sim {
     this.fac = new Float32Array(n);
     this.conc = new Float32Array(n);
     this.sed = new Float32Array(n); // sédiment en suspension (m)
+    this.comp = new Float32Array(n); // tassement du sable (0..1)
     this.foam = new Float32Array(n);
     this.thr = new Float32Array(n);
     this.ocean = new Uint8Array(n);
@@ -172,6 +173,7 @@ export class Sim {
     this.hx.fill(0);
     this.hz.fill(0);
     this.sed.fill(0);
+    this.comp.fill(0);
     this.foam.fill(0);
     // la face sous le vent s'éboule jusqu'à l'angle de talus
     for (let k = 0; k < 400; k++) if (!this.avalanche()) break;
@@ -198,7 +200,7 @@ export class Sim {
     }
     for (let c = 0; c < this.spIdx.length; c++) if (this.spW[c] === 1) s[this.spIdx[c]] = -this.h0;
     for (let i = 0; i < n; i++) w[i] = s[i] < 0 ? -s[i] : 0;
-    for (const a of [this.qx, this.qz, this.ux, this.uz, this.hx, this.hz, this.sed, this.foam]) a.fill(0);
+    for (const a of [this.qx, this.qz, this.ux, this.uz, this.hx, this.hz, this.sed, this.foam, this.comp]) a.fill(0);
     this.floodOcean();
     this.buildRenderData();
     return true;
@@ -475,7 +477,7 @@ export class Sim {
 
   // ---------- érosion / dépôt / écume ----------
   erosion(dt) {
-    const { N, s, w, qx, qz, sed, foam, bed, inSponge } = this;
+    const { N, s, w, qx, qz, sed, foam, bed, inSponge , comp } = this;
     const decay = Math.exp(-1.5 * dt);
     for (let z = 1; z < N - 1; z++) {
       let i = z * N + 1;
@@ -507,7 +509,7 @@ export class Sim {
             const cap = speed > UCRIT ? KC * (speed - UCRIT) * (wi < 0.05 ? wi : 0.05) : 0;
             const d = cap - sed[i];
             if (d > 0) {
-              let e = KE * dt * d;
+              let e = KE * dt * d * (1 - 0.7 * comp[i]); // le sable tassé résiste
               const av = s[i] - bed[i];
               if (e > av) e = av;
               if (e > 0.003) e = 0.003;
@@ -535,9 +537,10 @@ export class Sim {
 
   // ---------- avalanches : angle de talus fonction de l'humidité ----------
   avalanche() {
-    const { N, s, m, w, thr, bed, dx } = this;
+    const { N, s, m, w, thr, bed, dx , comp } = this;
     const n = N * N;
-    for (let i = 0; i < n; i++) thr[i] = w[i] > 0.02 ? TAN_SUB : TAN_TAB[(m[i] * 63.99) | 0];
+    // le sable tassé (grains imbriqués) tient une pente plus raide
+    for (let i = 0; i < n; i++) thr[i] = w[i] > 0.02 ? TAN_SUB : TAN_TAB[(m[i] * 63.99) | 0] * (1 + 0.5 * comp[i]);
     let moved = false;
     const flip = this.frameCount & 1;
     for (let p = 0; p < 4; p++) {
@@ -573,7 +576,10 @@ export class Sim {
             w[hi] += dw;
           }
           const f = mv * 10;
-          m[lo] += (m[hi] - m[lo]) * (f > 1 ? 1 : f);
+          const ff = f > 1 ? 1 : f;
+          m[lo] += (m[hi] - m[lo]) * ff;
+          comp[lo] -= comp[lo] * ff; // le sable éboulé est meuble
+          comp[hi] -= comp[hi] * ff;
           moved = true;
         }
       }
@@ -590,7 +596,7 @@ export class Sim {
   windTransport(dt) {
     const U0 = this.wind;
     if (U0 * 1.6 <= WIND_T) return;
-    const { N, s, w, m, bed, dx } = this;
+    const { N, s, w, m, bed, dx , comp } = this;
     const kSat = Math.min(1, dx / L_SAT),
       kDep = Math.min(1, dx / L_DEP);
     const drop = TAN_SHADOW * dx;
@@ -621,7 +627,7 @@ export class Sim {
             sh = sh < 0.4 ? 0.4 : sh > 1.6 ? 1.6 : sh;
             const U = U0 * sh;
             const Ut = WIND_T * (1 + 8 * mi);
-            if (U > Ut) cap = KQ * (U - Ut) * (U + Ut) * (U + Ut);
+            if (U > Ut) cap = KQ * (U - Ut) * (U + Ut) * (U + Ut) * (1 - 0.85 * comp[i]);
           }
         }
         let dq = (cap - q) * (cap > q ? kSat : kDep);
@@ -644,7 +650,7 @@ export class Sim {
 
   // ---------- humidité du sable ----------
   moisture(dt) {
-    const { N, L, s, w, m, ocean, dx, shade } = this;
+    const { N, L, s, w, m, ocean, dx, shade , comp } = this;
     const dm = Math.min(0.2, (1.5e-3 * dt) / (dx * dx)); // diffusion latérale
     const capRate = Math.min(1, 2 * dt);
     const evap = EVAP * dt * this.sun * (0.55 + this.wind / 8); // Dalton : ∝ (a + b·U)
@@ -674,6 +680,7 @@ export class Sim {
         }
         const cap = si <= 0 ? 1 : si >= CAP_H ? 0 : (1 - si / CAP_H) * (1 - si / CAP_H);
         if (mi < cap) mi += (cap - mi) * capRate;
+        if (mi > 0.92 && comp[i] > 0) comp[i] -= comp[i] * Math.min(1, dt); // détrempé : le tassement se perd
         m[i] = mi < 0 ? 0 : mi > 1 ? 1 : mi;
         // nappe phréatique : un trou sous le niveau de la mer se remplit
         if (si < 0 && !ocean[i]) {
@@ -834,7 +841,7 @@ export class Sim {
         const ddx = (ix - cx) * dx,
           ddz = (iz - cz) * dx;
         const d2 = ddx * ddx + ddz * ddz;
-        if (d2 <= r * r) fn(ix + iz * N, d2);
+        if (d2 <= r * r) fn(ix + iz * N, d2, ddx, ddz);
       }
   }
 
@@ -876,6 +883,7 @@ export class Sim {
       s[i] += d;
       const f = d * 12;
       m[i] += (moist - m[i]) * (f > 1 ? 1 : f);
+      this.comp[i] -= this.comp[i] * (f > 1 ? 1 : f);
     });
   }
 
@@ -910,47 +918,110 @@ export class Sim {
 
   // démoule un pâté tronconique (seau retourné) en conservant le volume
   stamp(x, z, R, rTop, H, vol, moist) {
-    const { s, m, dx } = this;
+    this.stampShape(x, z, R, (u, v) => {
+      const d = Math.hypot(u, v);
+      return d <= rTop ? 1 : d >= R ? 0 : (R - d) / (R - rTop);
+    }, H, vol, moist, 1, 0);
+  }
+
+  // Démoule une forme quelconque : shape(u, v) ∈ [0,1] donne la hauteur
+  // relative du moule, (u, v) étant les coordonnées locales tournées de
+  // (ax, az). La hauteur est ajustée pour restituer exactement le volume.
+  stampShape(x, z, R, shape, H, vol, moist, ax = 1, az = 0) {
+    const { s, m, comp, dx } = this;
     const a = dx * dx;
-    let base = 0,
-      cnt = 0;
-    this.disc(x, z, R, (i) => {
-      base += s[i];
-      cnt++;
+    const cells = [],
+      fr = [];
+    let base = 0;
+    this.disc(x, z, R, (i, d2, ddx, ddz) => {
+      const f = shape(ddx * ax + ddz * az, -ddx * az + ddz * ax);
+      if (f > 0) {
+        cells.push(i);
+        fr.push(f);
+        base += s[i];
+      }
     });
-    if (!cnt) return;
-    base /= cnt;
-    const shape = (d2) => {
-      const d = Math.sqrt(d2);
-      return d <= rTop ? 1 : (R - d) / (R - rTop);
-    };
+    if (!cells.length) return;
+    base /= cells.length;
     const volFor = (h) => {
       let v = 0;
-      this.disc(x, z, R, (i, d2) => {
-        const t = base + h * shape(d2) - s[i];
+      for (let k = 0; k < cells.length; k++) {
+        const t = base + h * fr[k] - s[cells[k]];
         if (t > 0) v += t * a;
-      });
+      }
       return v;
     };
     let lo = 0,
       hi = H * 1.6;
-    for (let k = 0; k < 14; k++) {
+    for (let k = 0; k < 16; k++) {
       const mid = (lo + hi) / 2;
       if (volFor(mid) > vol) hi = mid;
       else lo = mid;
     }
     const h = (lo + hi) / 2;
     let placed = 0;
-    this.disc(x, z, R, (i, d2) => {
-      const t = base + h * shape(d2) - s[i];
+    for (let k = 0; k < cells.length; k++) {
+      const i = cells[k];
+      const t = base + h * fr[k] - s[i];
       if (t > 0) {
         s[i] += t;
         placed += t * a;
-        const f = t * 12;
-        m[i] += (moist - m[i]) * (f > 1 ? 1 : f);
+        const f = t * 12 > 1 ? 1 : t * 12;
+        m[i] += (moist - m[i]) * f;
+        comp[i] += (0.5 - comp[i]) * f; // le sable moulé est déjà tassé
       }
+    }
+    if (vol - placed > 1e-5) this.addSand(x, z, vol - placed, moist, R * 0.5);
+  }
+
+  // Tasser et lisser à la main : diffusion des hauteurs (volume conservé,
+  // échanges entre cellules voisines) et augmentation du tassement.
+  pat(x, z, r, dt) {
+    const { N, s, comp } = this;
+    const k = Math.min(0.2, 3.5 * dt);
+    const r2 = r * r;
+    for (let pass = 0; pass < 2; pass++)
+      this.disc(x, z, r, (i, d2) => {
+        const wgt = k * (1 - d2 / r2);
+        let d = (s[i] - s[i + 1]) * wgt;
+        s[i] -= d;
+        s[i + 1] += d;
+        d = (s[i] - s[i + N]) * wgt;
+        s[i] -= d;
+        s[i + N] += d;
+      });
+    this.disc(x, z, r, (i, d2) => {
+      comp[i] += (1 - comp[i]) * Math.min(1, 2.5 * dt) * (1 - d2 / r2);
     });
-    if (vol - placed > 1e-5) this.addSand(x, z, vol - placed, moist, rTop);
+  }
+
+  // Impact d'un jet d'eau : l'eau arrive avec sa quantité de mouvement et
+  // arrache du sable, mis en suspension (volume conservé).
+  jet(x, z, vol, vx, vz) {
+    const { s, w, sed, bed, comp, ux, uz, dx } = this;
+    const r = Math.max(0.15, dx * 1.5);
+    let sum = 0;
+    this.disc(x, z, r, (i, d2) => {
+      sum += 1 - d2 / (r * r);
+    });
+    if (sum <= 0) return;
+    const k = vol / (sum * dx * dx);
+    const speed = Math.hypot(vx, vz);
+    const clamp = (v) => (v > 3 ? 3 : v < -3 ? -3 : v);
+    this.disc(x, z, r, (i, d2) => {
+      const d = k * (1 - d2 / (r * r));
+      w[i] += d;
+      let e = d * 0.22 * Math.min(1.5, speed / 4) * (1 - 0.7 * comp[i]);
+      const av = s[i] - bed[i];
+      if (e > av) e = av;
+      if (e > 0) {
+        s[i] -= e;
+        sed[i] += e;
+        comp[i] *= 0.9;
+      }
+      ux[i] = clamp(ux[i] + vx * 0.25);
+      uz[i] = clamp(uz[i] + vz * 0.25);
+    });
   }
 
   // intersection rayon / terrain (origine o, direction d normalisée)

@@ -44,6 +44,8 @@ function start() {
     if (name === 'dig') sound.dig(v);
     else if (name === 'stamp') sound.stamp();
     else if (name === 'scoop') sound.scoop();
+    else if (name === 'scrape') sound.scrape(v);
+    else if (name === 'pat') sound.pat();
   };
 
   const camera = new THREE.PerspectiveCamera(42, 1, 0.3, 7000);
@@ -190,7 +192,10 @@ function start() {
   // ---------- interface ----------
   const buttons = [...document.querySelectorAll('#bar button')];
   const statusEl = $('#status');
+  const moldLabel = document.querySelector('#bar button[data-tool=mold] .lbl');
   function selectTool(name) {
+    // recliquer sur le moule déjà choisi change sa forme
+    if (name === 'mold' && tools.current === 'mold' && tools.cycleMold()) moldLabel.textContent = tools.mold.def.name;
     if (!tools.setTool(name)) return;
     for (const b of buttons) b.setAttribute('aria-pressed', String(b.dataset.tool === name));
     canvas.style.cursor = name === 'camera' ? 'grab' : 'crosshair';
@@ -201,7 +206,7 @@ function start() {
   const toggleHelp = (open) => help.classList.toggle('open', open);
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
-    const k = { 1: 'camera', 2: 'shovel', 3: 'bucket', 4: 'water' }[e.key];
+    const k = { 1: 'camera', 2: 'shovel', 3: 'trowel', 4: 'hand', 5: 'bucket', 6: 'mold', 7: 'water', 8: 'hose' }[e.key];
     if (k) selectTool(k);
     if (e.key === 'Escape') toggleHelp(false);
     const step = 0.08;

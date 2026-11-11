@@ -1,7 +1,7 @@
 # A Game About a Dune
 
-Une dune de sable au milieu de l'océan, un parasol, et trois outils : une
-pelle, un seau et de l'eau. Pas de score, pas d'objectif — tout l'intérêt est
+Une dune de sable au milieu de l'océan, un parasol, et sept outils : pelle,
+truelle, main, seau, moules, arrosoir et tuyau. Pas de score, pas d'objectif — tout l'intérêt est
 dans la simulation physique.
 
 ## Lancer le jeu
@@ -22,11 +22,15 @@ Ajouter `?q=low` à l'adresse force le mode allégé (activé d'office sur mobil
 | Outil | Action |
 |---|---|
 | **Pelle** | un clic creuse, le clic suivant verse le sable là où l'on vise |
+| **Truelle** | maintenir et glisser pour creuser fin (douves, escaliers) ; le sable est rejeté sur le côté |
+| **Main** | maintenir et glisser pour lisser et tasser le sable |
 | **Seau** | clic sur le sable ou dans l'eau pour le remplir, puis clic pour démouler un pâté ou verser l'eau |
+| **Moule** | comme le seau, en cinq formes (tour, mur, pyramide, dôme, étoile) ; recliquer sur le bouton change de forme |
 | **Eau** | maintenir appuyé pour arroser |
+| **Tuyau** | maintenir appuyé : un jet puissant qui creuse et emporte le sable |
 | **Caméra** | glisser pour tourner ; toujours disponible au clic droit, à la molette, ou à deux doigts |
 
-Raccourcis : `1`–`4` pour les outils, flèches pour tourner la caméra.
+Raccourcis : `1`–`8` pour les outils, flèches pour tourner la caméra.
 
 Trois réglages changent les conditions :
 
@@ -49,6 +53,8 @@ Tout est en unités SI. La simulation (`src/sim.js`) tourne sur une grille de
 | Houle | Somme d'ondes d'Airy respectant la relation de dispersion `ω² = g·k·tanh(k·h)`, injectée aux bords de la zone simulée. |
 | Sable | Angle de talus : toute pente plus raide que `tan φ` s'éboule, avec conservation exacte du volume. φ = 34° pour le sable sec. |
 | Cohésion | φ dépend de l'humidité : ~76° pour le sable humide (ponts capillaires), puis effondrement quand il est saturé. |
+| Tassement | Le sable tassé à la main (ou sorti d'un moule) tient une pente jusqu'à 50 % plus raide et résiste mieux à l'eau et au vent ; il redevient meuble s'il s'éboule ou s'il est détrempé. |
+| Jet d'eau | Trajectoire balistique calculée pour retomber sur le point visé ; à l'impact l'eau transmet sa quantité de mouvement et arrache du sable, mis en suspension puis redéposé plus loin. |
 | Humidité | Infiltration de type Darcy / Green-Ampt (le sable sec « aspire » l'eau), drainage vers la capacité au champ, frange capillaire au-dessus de la nappe, évaporation selon la hauteur du soleil et le vent (loi de Dalton). |
 | Nappe phréatique | Un trou creusé sous le niveau de la mer se remplit tout seul. |
 | Érosion par l'eau | Capacité de transport `∝ (‖u‖ − u_crit)·h`, sédiment advecté de façon conservative par les flux d'eau. |
@@ -105,7 +111,7 @@ src/waves.js      houle (partagée entre la simulation et les shaders)
 src/shadow.js     ombres portées du relief
 src/world.js      scène : ciel, sable, eau, océan, parasol, heure du jour
 src/shaders.js    shaders GLSL
-src/tools.js      pelle, seau, arrosoir
+src/tools.js      pelle, truelle, main, seau, moules, arrosoir, tuyau
 src/particles.js  sable jeté, eau versée, sable soufflé
 src/audio.js      son synthétisé
 vendor/           three.js (licence MIT)
