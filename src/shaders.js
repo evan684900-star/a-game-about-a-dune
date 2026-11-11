@@ -345,7 +345,7 @@ void main(){
   float dist = length(V);
   V /= dist;
 
-  float shallow = smoothstep(0.0, 0.12, depth);
+  float shallow = smoothstep(0.03, 0.4, depth); // pas de clapot sur une flaque
   vec2 base = vSlope;
 #ifndef SIM
   // au large, la géométrie s'aplatit mais la houle reste visible dans les
@@ -377,10 +377,16 @@ void main(){
   vec3 light = SUN_COL * max(uSunDir.y, 0.0) * (0.3 + 0.7 * psh) + SKY_AMB;
   vec3 col = bg * T + vec3(0.012, 0.085, 0.10) * light * (1.0 - T);
 
-  float edge = smoothstep(0.003, 0.04, depth);
-  col = mix(col, refl, F * edge);
+  // une lame d'eau mince reste visible : teinte turquoise qui apparaît dès
+  // quelques millimètres (diffusion par l'eau chargée de sable fin)
+  float body = (1.0 - exp(-depth * 30.0)) * 0.68 * exp(-depth * 1.5);
+  col = mix(col, vec3(0.010, 0.150, 0.195) * light, body);
+  float edge = smoothstep(0.001, 0.02, depth);
+  // un filet d'eau est agité : sa surface rugueuse renvoie peu d'image nette du ciel
+  float mirror = edge * mix(0.22, 1.0, smoothstep(0.02, 0.3, depth));
+  col = mix(col, refl, F * mirror);
   float ndh = max(dot(N, normalize(V + uSunDir)), 0.0);
-  col += SUN_COL * psh * edge * (pow(ndh, 700.0) * 6.0 + pow(ndh, 90.0) * 0.12);
+  col += SUN_COL * psh * mirror * (pow(ndh, 700.0) * 6.0 + pow(ndh, 90.0) * 0.12);
 
   // écume
   float fn = fbm(vXZ0 * 4.0 + uTime * vec2(0.06, 0.03)) * 0.65 + vnoise(vXZ0 * 19.0 - uTime * vec2(0.05, 0.08)) * 0.35;

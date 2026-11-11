@@ -499,7 +499,8 @@ export class Sim {
         if (sp2 > 0.06) {
           // nombre de Froude : Fr² = u²/(g·h) ; régime torrentiel → ressaut, écume
           const fr2 = sp2 / (G * wi);
-          let src = sp2 > 0.2 && wi > 0.012 ? (fr2 - 0.9) * 0.8 : 0;
+          // écume : seulement dans le ressac (pas sur l'eau qui ruisselle sur la dune)
+          let src = sp2 > 0.2 && wi > 0.03 && s[i] < 0.3 ? (fr2 - 0.9) * 0.8 : 0;
           if (src > 0) {
             if (src > 1) src = 1;
             f += 3 * dt * src * (1 - f);
