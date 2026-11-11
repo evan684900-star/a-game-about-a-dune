@@ -205,7 +205,7 @@ const MOLDS = [
   {
     name: 'Tour',
     R: 0.3,
-    H: 0.75,
+    H: 0.6,
     color: 0xe5484d,
     shape: (u, v) => smoothEdge((0.3 - Math.hypot(u, v)) / 0.06),
   },
@@ -371,8 +371,11 @@ export class Tools {
         return HAND_R;
       case 'bucket':
         return this.bucket.kind === 'sand' ? BUCKET_R : 0.4;
-      case 'mold':
-        return this.mold.def.R * (this.mold.def.name === 'Pyramide' ? 0.72 : 1);
+      case 'mold': {
+        const d = this.mold.def;
+        if (!this.mold.kind) return Math.sqrt((1.35 * d.vol * 2) / (Math.PI * 0.5));
+        return d.R * (d.name === 'Pyramide' ? 0.72 : 1);
+      }
       case 'water':
         return 0.2;
       case 'hose':
@@ -503,7 +506,9 @@ export class Tools {
           b.contentMat.color.copy(WATER_COL);
           b.contentMat.roughness = 0.1;
         } else {
-          const r = sim.dig(c.x, c.z, def.digR || Math.max(0.35, def.R * 0.8), 0.5, def.vol);
+          // cuvette assez grande pour remplir le moule : volume ≈ π·r²·h/2
+          const digR = def.digR || Math.sqrt((1.35 * def.vol * 2) / (Math.PI * 0.5));
+          const r = sim.dig(c.x, c.z, digR, 0.5, def.vol);
           this.onEvent('dig', r.moist);
           b.vol = r.vol;
           b.moist = r.moist;

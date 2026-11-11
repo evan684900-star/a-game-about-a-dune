@@ -377,7 +377,7 @@ void main(){
   vec3 light = SUN_COL * max(uSunDir.y, 0.0) * (0.3 + 0.7 * psh) + SKY_AMB;
   vec3 col = bg * T + vec3(0.012, 0.085, 0.10) * light * (1.0 - T);
 
-  float edge = smoothstep(0.0, 0.02, depth);
+  float edge = smoothstep(0.003, 0.04, depth);
   col = mix(col, refl, F * edge);
   float ndh = max(dot(N, normalize(V + uSunDir)), 0.0);
   col += SUN_COL * psh * edge * (pow(ndh, 700.0) * 6.0 + pow(ndh, 90.0) * 0.12);
@@ -385,7 +385,7 @@ void main(){
   // écume
   float fn = fbm(vXZ0 * 4.0 + uTime * vec2(0.06, 0.03)) * 0.65 + vnoise(vXZ0 * 19.0 - uTime * vec2(0.05, 0.08)) * 0.35;
   float fm = smoothstep(0.52, 0.70, vInfo.y * 0.42 + fn * 0.62) * smoothstep(0.03, 0.25, vInfo.y);
-  col = mix(col, vec3(0.95, 0.98, 1.0) * light * 0.42, fm * 0.92 * smoothstep(0.003, 0.025, depth));
+  col = mix(col, vec3(0.95, 0.98, 1.0) * light * 0.42, fm * 0.92 * smoothstep(0.012, 0.06, depth));
 
   // perspective atmosphérique vers l'horizon
   float fog = 1.0 - exp(-dist * dist / (650.0 * 650.0));
