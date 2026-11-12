@@ -310,10 +310,14 @@ void main(){
   // vers le large pour rejoindre le plan lointain
   float fade = 1.0 - smoothstep(50.0, 88.0, box);
   vec2 slope; vec2 disp;
-  float e = swellWave(wp.xz, uTime, slope, disp) * uSwell * fade;
-  float gerst = smoothstep(uL * 0.5, uL * 0.5 + 7.0, box) * fade * uSwell;
+  // même écrêtage que la simulation (limite de déferlement, C = 0,6·h0)
+  float C = 0.6 * uH0;
+  float th = tanh(swellWave(wp.xz, uTime, slope, disp) * uSwell / C);
+  float kc = 1.0 - th * th;
+  float e = C * th * fade;
+  float gerst = smoothstep(uL * 0.5, uL * 0.5 + 7.0, box) * fade * uSwell * kc;
   p = vec3(wp.x + disp.x * gerst, e, wp.z + disp.y * gerst);
-  vSlope = slope * uSwell * fade;
+  vSlope = slope * uSwell * kc * fade;
   vInfo = vec3(uH0 + e + smoothstep(uL * 0.5, 60.0, box) * 14.0, 0.0, fade);
   #endif
 #endif
@@ -328,6 +332,7 @@ ${SHADOW}
 uniform sampler2D uScene;
 uniform vec2 uRes;
 uniform float uSwell;
+uniform float uH0;
 varying vec3 vWorld;
 varying vec2 vXZ0;
 varying vec3 vInfo;
@@ -351,8 +356,8 @@ void main(){
   // au large, la géométrie s'aplatit mais la houle reste visible dans les
   // reflets : pentes analytiques par pixel, estompées avant l'horizon
   vec2 ws; vec2 wd;
-  swellWave(vXZ0, uTime, ws, wd);
-  base = mix(ws * uSwell * (1.0 - smoothstep(120.0, 520.0, dist)), vSlope, vInfo.z);
+  float wth = tanh(swellWave(vXZ0, uTime, ws, wd) * uSwell / (0.6 * uH0));
+  base = mix(ws * uSwell * (1.0 - wth * wth) * (1.0 - smoothstep(120.0, 520.0, dist)), vSlope, vInfo.z);
 #endif
   vec2 sl = base + detailSlope(vXZ0, uTime, dist) * shallow * (0.2 + 0.4 * min(uSwell, 1.5) + 0.9 * uWind);
   vec3 N = normalize(vec3(-sl.x, 1.0, -sl.y));

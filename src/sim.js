@@ -223,7 +223,9 @@ export class Sim {
         if (d < SPONGE) {
           idx.push(x + z * N);
           const t = (SPONGE - d) / SPONGE;
-          wgt.push(d === 0 ? 1 : t * t * 0.35);
+          // zone de relaxation : raccord progressif entre la houle imposée au
+          // bord (poids 1) et la simulation libre (poids 0)
+          wgt.push(d === 0 ? 1 : t * t * t);
         }
       }
     this.spIdx = Int32Array.from(idx);
@@ -252,6 +254,7 @@ export class Sim {
   applyBoundary() {
     const { waves, spIdx, spW, spSin, spCos, s, w, qx, qz, ux, uz, hx, hz, sed, cT, sT, swell } = this;
     const nw = waves.length;
+    const C = 0.6 * this.h0;
     for (let j = 0; j < nw; j++) {
       cT[j] = Math.cos(waves[j].om * this.time) * waves[j].A * swell;
       sT[j] = Math.sin(waves[j].om * this.time) * waves[j].A * swell;
@@ -270,6 +273,16 @@ export class Sim {
         const wv = waves[j];
         qxa += e * wv.c * wv.dx; // onde progressive : q = η·c
         qza += e * wv.c * wv.dz;
+      }
+      // Limite de déferlement : en eau peu profonde une vague ne dépasse pas
+      // ~0,8 fois la profondeur (critère de McCowan). On écrête donc
+      // l'élévation de façon douce vers C = 0,6·h0.
+      if (eta !== 0) {
+        const lim = C * Math.tanh(eta / C);
+        const kq = lim / eta;
+        eta = lim;
+        qxa *= kq;
+        qza *= kq;
       }
       let wi = w[i] + g * (eta - (s[i] + w[i]));
       w[i] = wi > 0 ? wi : 0;
@@ -778,8 +791,10 @@ export class Sim {
   frame(dtFrame) {
     const total = Math.min(dtFrame, 1 / 30);
     // condition CFL : dt ≤ 0,62·dx/√(g·h)
-    const dtMax = (0.62 * this.dx) / Math.sqrt(G * (this.h0 + 0.35));
-    const nSub = Math.max(1, Math.min(5, Math.ceil(total / dtMax - 0.02)));
+    // (la profondeur et la vitesse du courant grandissent avec la houle)
+    const amp = Math.max(0, Math.min(0.6 * this.h0, 0.19 * this.swell) - 0.19);
+    const dtMax = (0.62 * this.dx) / (Math.sqrt(G * (this.h0 + 0.35 + amp)) + 2 * amp);
+    const nSub = Math.max(1, Math.min(10, Math.ceil(total / dtMax - 0.02)));
     const dt = total / nSub;
     for (let k = 0; k < nSub; k++) {
       this.time += dt;

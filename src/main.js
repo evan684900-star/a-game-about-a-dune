@@ -218,7 +218,7 @@ function start() {
   // réglages : houle, vent, heure
   const fr = (v, d) => v.toFixed(d).replace('.', ',');
   const settings = {
-    swell: { el: $('#swell'), out: $('#swellV'), apply: (v) => (sim.swell = v), text: (v) => `× ${fr(v, 2)}` },
+    swell: { el: $('#swell'), out: $('#swellV'), apply: (v) => (sim.swell = v), text: (v) => `× ${fr(v, 1)}` },
     wind: { el: $('#wind'), out: $('#windV'), apply: (v) => (sim.wind = v), text: (v) => `${Math.round(v * 3.6)} km/h` },
     hour: {
       el: $('#hour'),
