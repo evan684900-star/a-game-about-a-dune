@@ -315,7 +315,8 @@ void main(){
   float th = tanh(swellWave(wp.xz, uTime, slope, disp) * uSwell / C);
   float kc = 1.0 - th * th;
   float e = C * th * fade;
-  float gerst = smoothstep(uL * 0.5, uL * 0.5 + 7.0, box) * fade * uSwell * kc;
+  // déplacement horizontal borné : au-delà, la trochoïde se replierait sur elle-même
+  float gerst = smoothstep(uL * 0.5, uL * 0.5 + 7.0, box) * fade * min(uSwell, 1.5) * kc;
   p = vec3(wp.x + disp.x * gerst, e, wp.z + disp.y * gerst);
   vSlope = slope * uSwell * kc * fade;
   vInfo = vec3(uH0 + e + smoothstep(uL * 0.5, 60.0, box) * 14.0, 0.0, fade);
