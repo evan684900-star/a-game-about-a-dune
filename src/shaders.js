@@ -275,6 +275,7 @@ ${GRID}
 uniform float uTime;
 uniform float uSwell;
 uniform float uH0;
+uniform vec2 uTsu; // tsunami : position de la crête, hauteur (0 = aucun)
 varying vec3 vWorld;
 varying vec2 vXZ0;
 varying vec3 vInfo;   // profondeur, écume, atténuation
@@ -315,10 +316,18 @@ void main(){
   float th = tanh(swellWave(wp.xz, uTime, slope, disp) * uSwell / C);
   float kc = 1.0 - th * th;
   float e = C * th * fade;
+  float tsl = 0.0;
+  if (uTsu.y > 0.0) {
+    // onde solitaire η = H·sech²((x − xc)/W), comme dans la simulation
+    float ta = (wp.x - uTsu.x) / TSU_W;
+    float sc = 1.0 / cosh(clamp(ta, -12.0, 12.0));
+    e += uTsu.y * sc * sc * fade;
+    tsl = -2.0 * uTsu.y / TSU_W * sc * sc * tanh(ta) * fade;
+  }
   // déplacement horizontal borné : au-delà, la trochoïde se replierait sur elle-même
   float gerst = smoothstep(uL * 0.5, uL * 0.5 + 7.0, box) * fade * min(uSwell, 1.5) * kc;
   p = vec3(wp.x + disp.x * gerst, e, wp.z + disp.y * gerst);
-  vSlope = slope * uSwell * kc * fade;
+  vSlope = slope * uSwell * kc * fade + vec2(tsl, 0.0);
   vInfo = vec3(uH0 + e + smoothstep(uL * 0.5, 60.0, box) * 14.0, 0.0, fade);
   #endif
 #endif

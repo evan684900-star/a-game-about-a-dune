@@ -25,6 +25,7 @@
   .row { display: flex; gap: 6px; }
   button { font: inherit; color: var(--ink); background: rgba(255,255,255,.1); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
   button:hover { background: rgba(255,255,255,.18); }
+  button:disabled { opacity: .5; cursor: default; }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .row button { flex: 1; padding: 6px 8px; font-size: 13px; min-height: 32px; }
   .row button.icon { flex: 0 0 38px; display: grid; place-items: center; padding: 0; }
@@ -72,6 +73,9 @@
   <label><span>Houle</span><input id="swell" type="range" min="0" max="10" step="0.1" value="1" aria-label="Hauteur de la houle"><output id="swellV" for="swell"></output></label>
   <label><span>Vent</span><input id="wind" type="range" min="0" max="15" step="0.5" value="3.5" aria-label="Vitesse du vent"><output id="windV" for="wind"></output></label>
   <label><span>Heure</span><input id="hour" type="range" min="6" max="20" step="0.25" value="15.5" aria-label="Heure du jour"><output id="hourV" for="hour"></output></label>
+  <div class="row">
+    <button id="tsunami" type="button">Tsunami</button>
+  </div>
   <div class="row">
     <button id="reset" type="button">Réinitialiser</button>
     <button id="mute" type="button" aria-label="Son" aria-pressed="true" class="icon">

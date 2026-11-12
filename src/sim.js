@@ -19,6 +19,12 @@ import { G } from './waves.js';
 
 const SQRT2 = Math.SQRT2;
 
+// tsunami : hauteur, demi-largeur, départ, célérité √(g·(h0 + H)) pour h0 = 1,2 m
+export const TSU_H = 2.8;
+export const TSU_W = 6;
+const TSU_X0 = -80;
+const TSU_C = Math.sqrt(G * (1.2 + TSU_H));
+
 // --- constantes physiques ---
 const CF = 0.015; // coefficient de frottement quadratique (Darcy-Weisbach)
 const NU3 = 3e-5; // 3·ν (viscosité, gonflée pour les films minces)
@@ -73,6 +79,7 @@ export class Sim {
     this.cf = CF;
     this.nu3 = NU3;
     this.foamSum = 0;
+    this.tsuT = -1; // instant de déclenchement du tsunami (-1 : aucun)
     this.time = 0;
     this.frameCount = 0;
     this.shade = { x: 0, z: 0, r2: 0 };
@@ -174,6 +181,7 @@ export class Sim {
     this.hz.fill(0);
     this.sed.fill(0);
     this.comp.fill(0);
+    this.tsuT = -1;
     this.foam.fill(0);
     // la face sous le vent s'éboule jusqu'à l'angle de talus
     for (let k = 0; k < 400; k++) if (!this.avalanche()) break;
@@ -231,11 +239,13 @@ export class Sim {
     this.spIdx = Int32Array.from(idx);
     this.spW = Float32Array.from(wgt);
     const nw = waves.length;
+    this.spX = new Float32Array(idx.length);
     this.spSin = new Float32Array(idx.length * nw);
     this.spCos = new Float32Array(idx.length * nw);
     for (let c = 0; c < idx.length; c++) {
       const i = idx[c];
       const x = ((i % N) / (N - 1) - 0.5) * L;
+      this.spX[c] = x;
       const z = (((i / N) | 0) / (N - 1) - 0.5) * L;
       for (let j = 0; j < nw; j++) {
         const wv = waves[j];
@@ -250,11 +260,29 @@ export class Sim {
     this.sT = new Float32Array(nw);
   }
 
+  // ---------- tsunami ----------
+  // Une onde solitaire part du large (x = TSU_X0) et traverse le domaine à
+  // la célérité c = √(g·(h0 + H)). Renvoie la position de sa crête, ou null.
+  startTsunami() {
+    if (this.tsunamiX() === null) this.tsuT = this.time;
+  }
+  tsunamiX() {
+    if (this.tsuT < 0) return null;
+    const x = TSU_X0 + TSU_C * (this.time - this.tsuT);
+    if (x > 70) {
+      this.tsuT = -1;
+      return null;
+    }
+    return x;
+  }
+
   // ---------- conditions aux limites : houle entrante ----------
   applyBoundary() {
     const { waves, spIdx, spW, spSin, spCos, s, w, qx, qz, ux, uz, hx, hz, sed, cT, sT, swell } = this;
     const nw = waves.length;
     const C = 0.6 * this.h0;
+    const tsuX = this.tsunamiX();
+    const tsu = tsuX !== null;
     for (let j = 0; j < nw; j++) {
       cT[j] = Math.cos(waves[j].om * this.time) * waves[j].A * swell;
       sT[j] = Math.sin(waves[j].om * this.time) * waves[j].A * swell;
@@ -283,6 +311,13 @@ export class Sim {
         eta = lim;
         qxa *= kq;
         qza *= kq;
+      }
+      if (tsu) {
+        // tsunami : onde solitaire η = H·sech²((x − xc)/W), q = c·η
+        const ch = Math.cosh((this.spX[c] - tsuX) / TSU_W);
+        const et = TSU_H / (ch * ch);
+        eta += et;
+        qxa += et * TSU_C;
       }
       let wi = w[i] + g * (eta - (s[i] + w[i]));
       w[i] = wi > 0 ? wi : 0;
@@ -520,13 +555,16 @@ export class Sim {
           }
           if (!inSponge[i]) {
             const speed = Math.sqrt(sp2);
-            const cap = speed > UCRIT ? KC * (speed - UCRIT) * (wi < 0.05 ? wi : 0.05) : 0;
+            // épaisseur d'eau chargée de sable : mince en temps normal, toute la
+            // colonne quand le courant devient violent (tsunami, très forte houle)
+            const lay = 0.05 + (speed > 1.5 ? 0.12 * (speed - 1.5) : 0);
+            const cap = speed > UCRIT ? KC * (speed - UCRIT) * (wi < lay ? wi : lay) : 0;
             const d = cap - sed[i];
             if (d > 0) {
               let e = KE * dt * d * (1 - 0.7 * comp[i]); // le sable tassé résiste
               const av = s[i] - bed[i];
               if (e > av) e = av;
-              if (e > 0.003) e = 0.003;
+              if (e > 0.006) e = 0.006;
               if (e > 0) {
                 s[i] -= e;
                 sed[i] += e;
@@ -793,7 +831,8 @@ export class Sim {
     // condition CFL : dt ≤ 0,62·dx/√(g·h)
     // (la profondeur et la vitesse du courant grandissent avec la houle)
     const amp = Math.max(0, Math.min(0.6 * this.h0, 0.19 * this.swell) - 0.19);
-    const dtMax = (0.62 * this.dx) / (Math.sqrt(G * (this.h0 + 0.35 + amp)) + 2 * amp);
+    let dtMax = (0.62 * this.dx) / (Math.sqrt(G * (this.h0 + 0.35 + amp)) + 2 * amp);
+    if (this.tsunamiX() !== null) dtMax = Math.min(dtMax, (0.5 * this.dx) / (TSU_C * 1.7));
     const nSub = Math.max(1, Math.min(10, Math.ceil(total / dtMax - 0.02)));
     const dt = total / nSub;
     for (let k = 0; k < nSub; k++) {

@@ -315,6 +315,13 @@ function start() {
   setInterval(save, 20000);
   window.addEventListener('pagehide', save);
 
+  const tsuBtn = $('#tsunami');
+  tsuBtn.addEventListener('click', () => {
+    sound.start();
+    sim.startTsunami();
+    tsuBtn.blur();
+  });
+
   $('#reset').addEventListener('click', () => {
     if (!window.confirm('Réinitialiser l’île ? Tout ce que tu as construit sera effacé.')) return;
     sim.reset();
@@ -406,6 +413,8 @@ function start() {
       U.uToolA.value.w = 0;
       U.uTool2.value.w = 0;
     }
+    const tsuOn = sim.tsunamiX() !== null;
+    if (tsuBtn.disabled !== tsuOn) tsuBtn.disabled = tsuOn;
     const st = tools.status();
     if (st !== lastStatus) statusEl.textContent = lastStatus = st;
 

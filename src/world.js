@@ -3,6 +3,7 @@ import * as THREE from '../vendor/three.module.min.js';
 import { wavesGLSL } from './waves.js';
 import { SKY_VERT, SKY_FRAG, SAND_VERT, SAND_FRAG, waterVert, waterFrag } from './shaders.js';
 import { ShadowMap, SHADOW_K } from './shadow.js';
+import { TSU_H, TSU_W } from './sim.js';
 
 function gridGeometry(N, L) {
   const pos = new Float32Array(N * N * 3);
@@ -150,6 +151,7 @@ export function createWorld(renderer, sim, swell, detail, quality) {
     uDx: { value: dx },
     uH0: { value: h0 },
     uSwell: { value: 1 },
+    uTsu: { value: new THREE.Vector2(0, 0) },
     uCursor: { value: new THREE.Vector4(0, 0, 0.3, 0) },
     uScene: { value: null },
     uRes: { value: new THREE.Vector2(1, 1) },
@@ -203,7 +205,7 @@ export function createWorld(renderer, sim, swell, detail, quality) {
       uniforms: U,
       vertexShader: waterVert(wg),
       fragmentShader: waterFrag(wg),
-      defines: { SHADOW_K: K, ...defines },
+      defines: { SHADOW_K: K, TSU_W: TSU_W.toFixed(2), ...defines },
     });
   const water = [];
   const simWater = new THREE.Mesh(grid, waterMat({ SIM: 1 }));
@@ -302,6 +304,8 @@ export function createWorld(renderer, sim, swell, detail, quality) {
   function update(dt, time) {
     U.uTime.value = time;
     U.uSwell.value = sim.swell;
+    const tx = sim.tsunamiX();
+    U.uTsu.value.set(tx === null ? 0 : tx, tx === null ? 0 : TSU_H);
     U.uWind.value = Math.min(1, sim.wind / 15);
     dataTex.needsUpdate = true;
     // ombres : calcul étalé sur 4 images ; immédiat quand le soleil bouge
