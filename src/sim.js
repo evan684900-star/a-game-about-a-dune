@@ -27,6 +27,7 @@ const TSU_C = Math.sqrt(G * (1.2 + TSU_H));
 
 // --- constantes physiques ---
 const CF = 0.015; // coefficient de frottement quadratique (Darcy-Weisbach)
+const KSM = 0.06; // lissage des ressauts (dissipation du déferlement)
 const NU3 = 3e-5; // 3·ν (viscosité, gonflée pour les films minces)
 const TAN_DRY = 0.675; // tan(34°)  sable sec
 const TAN_WET = 4.2; // tan(~76°) sable humide (ponts capillaires)
@@ -335,6 +336,7 @@ export class Sim {
     const k = (dt * G) / dx;
     const r = dt / dx;
     const vmax = (0.4 * dx) / dt;
+    const ksm = (KSM * dx) / dt;
     // 1. hauteur d'eau sur chaque face (la vitesse u est la variable transportée)
     for (let z = 0; z < N; z++) {
       let i = z * N;
@@ -406,8 +408,14 @@ export class Sim {
         }
         un /= 1 + (dt * (cf * (un < 0 ? -un : un) + nu3 / hf)) / hf;
         un = un > vmax ? vmax : un < -vmax ? -vmax : un;
+        // Dissipation du déferlement : là où la surface fait une marche d'une
+        // maille à l'autre, un flux supplémentaire l'étale (∝ Δη², donc sans
+        // effet sur une houle lisse). Il supprime les pics à l'échelle de la grille.
+        const de = s[i] + w[i] - s[i + 1] - w[i + 1];
+        const ade = de < 0 ? -de : de;
+        // (flux de masse seulement : il n'ajoute pas de quantité de mouvement)
         ux2[i] = un;
-        qx2[i] = un * hf;
+        qx2[i] = un * hf + (ade > 0.004 && hf > 0.05 ? ksm * de * (ade > 0.08 ? 1 : ade * 12.5) : 0);
       }
       qx2[i] = 0;
       ux2[i] = 0;
@@ -446,8 +454,11 @@ export class Sim {
         }
         un /= 1 + (dt * (cf * (un < 0 ? -un : un) + nu3 / hf)) / hf;
         un = un > vmax ? vmax : un < -vmax ? -vmax : un;
+        const de = s[i] + w[i] - s[i + N] - w[i + N];
+        const ade = de < 0 ? -de : de;
+        // (flux de masse seulement : il n'ajoute pas de quantité de mouvement)
         uz2[i] = un;
-        qz2[i] = un * hf;
+        qz2[i] = un * hf + (ade > 0.004 && hf > 0.05 ? ksm * de * (ade > 0.08 ? 1 : ade * 12.5) : 0);
       }
     }
     this.qx = qx2;
@@ -828,10 +839,20 @@ export class Sim {
   // ---------- boucle ----------
   frame(dtFrame) {
     const total = Math.min(dtFrame, 1 / 30);
-    // condition CFL : dt ≤ 0,62·dx/√(g·h)
-    // (la profondeur et la vitesse du courant grandissent avec la houle)
-    const amp = Math.max(0, Math.min(0.6 * this.h0, 0.19 * this.swell) - 0.19);
-    let dtMax = (0.62 * this.dx) / (Math.sqrt(G * (this.h0 + 0.35 + amp)) + 2 * amp);
+    // Condition CFL calculée sur l'état réel de l'eau : dt ≤ 0,68·dx / max(√(g·h) + |u|).
+    // Indispensable à forte houle ou après un tsunami, quand les courants
+    // restent rapides alors que le forçage est déjà retombé.
+    const { w, ux, uz } = this;
+    let vm = Math.sqrt(G * (this.h0 + 0.35));
+    for (let i = 0, n = w.length; i < n; i++) {
+      const h = w[i];
+      if (h < 0.02) continue;
+      const a = ux[i] < 0 ? -ux[i] : ux[i],
+        b = uz[i] < 0 ? -uz[i] : uz[i];
+      const v = Math.sqrt(G * h) + (a > b ? a : b);
+      if (v > vm) vm = v;
+    }
+    let dtMax = (0.68 * this.dx) / vm;
     if (this.tsunamiX() !== null) dtMax = Math.min(dtMax, (0.5 * this.dx) / (TSU_C * 1.7));
     const nSub = Math.max(1, Math.min(10, Math.ceil(total / dtMax - 0.02)));
     const dt = total / nSub;
